@@ -55,6 +55,7 @@ export function createSolix(ctx) {
 
     // Live telemetry over the shared AWS-IoT broker (same transport the eufy path uses).
     try {
+      const { SolixMqtt } = await loadSolixSdk();
       const mqtt = new SolixMqtt({ mqttInfo: await st.client.getUserMqttInfo() });
       st.mqtt = mqtt;
       mqtt.on("error", (e) => console.error(`[bridge] solix mqtt: ${e?.message ?? e}`));
@@ -81,6 +82,13 @@ export function createSolix(ctx) {
     st.status = "connecting";
     ctx.broadcast({ event: "solixAuth", state: "connecting" });
     try {
+      const { SolixClient, FileSolixSessionStore } = await loadSolixSdk();
+      st.client ??= new SolixClient({
+        email: s.email,
+        password: s.password,
+        countryCode: s.country,
+        store: new FileSolixSessionStore(s.session),
+      });
       const r = await st.client.login();
       if (r.status === "2fa") {
         st.status = "2fa";

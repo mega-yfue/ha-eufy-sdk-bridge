@@ -4,7 +4,7 @@ The bridge is one container that logs into eufy **once** and exposes the SDK ove
 video) for the [`ha-eufy-sdk`](https://github.com/mega-yfue/ha-eufy-sdk) Home Assistant integration.
 The published image already bundles the SDK and go2rtc, so you don't build anything — you pull and run.
 
-- **Image:** `ghcr.io/mega-yfue/ha-eufy-sdk-bridge:latest` (multi-arch: `amd64` · `arm64` · `arm/v7`)
+- **Image:** `ghcr.io/mega-yfue/ha-eufy-sdk-bridge:latest` (multi-arch: `amd64` · `arm64`)
 - **Ports:** `3000` WS/HTTP control · `1984` go2rtc API/WebRTC · `8554` RTSP · `8555` WebRTC (TCP/UDP)
 
 > **One session per account.** eufy allows a single active login per account, so run **exactly one**
@@ -25,15 +25,15 @@ services:
     image: ghcr.io/mega-yfue/ha-eufy-sdk-bridge:latest
     container_name: eufy-bridge
     restart: unless-stopped
-    network_mode: host          # needed for go2rtc WebRTC (UDP/ICE)
+    network_mode: host # needed for go2rtc WebRTC (UDP/ICE)
     environment:
       EUFY_EMAIL: "you@example.com"
       EUFY_PASSWORD: "your-password"
-      EUFY_COUNTRY: "GB"         # your account's country code
-      BRIDGE_HOST: "0.0.0.0"     # bind all interfaces
-      BRIDGE_PORT: "3000"        # change the WS/control port here if 3000 is taken
+      EUFY_COUNTRY: "GB" # your account's country code
+      BRIDGE_HOST: "0.0.0.0" # bind all interfaces
+      BRIDGE_PORT: "3000" # change the WS/control port here if 3000 is taken
     volumes:
-      - /opt/homeassistant/eufy-bridge-data:/app/data   # persists the login token
+      - /opt/homeassistant/eufy-bridge-data:/app/data # persists the login token
 ```
 
 Start just the bridge:
@@ -85,29 +85,27 @@ Point the integration at this host's IP and `BRIDGE_PORT`.
 
 ## Configuration reference
 
-| Env var | Default | Meaning |
-| --- | --- | --- |
-| `EUFY_EMAIL` | — (required) | eufy account email |
-| `EUFY_PASSWORD` | — (required) | eufy account password |
-| `EUFY_COUNTRY` | `GB` | two-letter account country (routes the region) |
-| `BRIDGE_HOST` | `0.0.0.0` | interface the WS/HTTP binds to |
-| `BRIDGE_PORT` | `3000` | WS/HTTP control port |
-| `EUFY_POLL_MS` | `600000` (10 min) | how often the bridge polls the cloud for device state; `0` disables. Also changeable live from the HA integration / the `config.set` WS command |
-| `EUFY_SESSION` | `/app/data/.eufy-session.json` | where the login token is persisted (the FCM push registration is persisted beside it as `.eufy-fcm.json`, so restarts reconnect instead of re-registering) |
-| `BRIDGE_OPENUDID` | — (derived from email) | distinct per-install device identity. Leave unset for a single bridge. Set a **unique** value per bridge if you run more than one on the same account — otherwise they share an identity and displace each other's session / split push delivery |
-| `SOLIX_EMAIL` | — (optional) | Anker **Solix** account email — enables Solix support (power stations / smart meter). A **separate** account from the eufy one; needs `SOLIX_PASSWORD` too |
-| `SOLIX_PASSWORD` | — | Solix account password (enables Solix together with `SOLIX_EMAIL`) |
-| `SOLIX_COUNTRY` | `EUFY_COUNTRY` | two-letter Solix account country |
-| `SOLIX_SESSION` | `/app/data/.solix-session.json` | where the Solix login token is persisted |
-| `GO2RTC_CONFIG` | `/app/data/go2rtc.yaml` | generated from the live device list at startup |
-| `STREAM_IDLE_MS` | `300000` (5 min) | auto-off a camera's live P2P feed after this long with no detection event, even if HA still holds the stream "open" — stops the radio to save battery; the next detection reopens it. `0` disables |
-| `RTSP_IDLE_OFF_MS` | `300000` (5 min) | battery-saver: turn a **battery** camera's native `rtspStream` publish OFF after this long idle (no detection, no active bridge stream), so a forgotten `rtspStream=ON` can't drain it. Wired cameras are never touched. `0` disables |
-| `STREAM_FAIL_BACKOFF_MS` | `30000` (30 s) | battery-saver: after a live-stream open **fails** (P2P connect timeout / no P2P endpoint), refuse to reopen that camera for this window — doubling per consecutive failure, capped at 5 min — so go2rtc's ~30 s ffmpeg retries return a fast 503 instead of waking the camera radio on every retry. Cleared by a successful open or a detection. `0` disables |
-| `BRIDGE_DEBUG` | off | `1` logs each incoming WS command, control-command timing, and P2P connect/close/ack — enough to trace the frontend↔SDK flow |
-| `BRIDGE_DEBUG_P2P` | off | `1` additionally routes the SDK's raw per-frame transport logs (very noisy) |
-| `BRIDGE_EVENT_LOG` | **on** | prints a `[bridge:event]` line per push/semantic event: what it is, how many frontend clients it reached, and each "Last event" image fetch + result. Narrow (only real events), not the `BRIDGE_DEBUG` firehose. `0` silences |
-| `BRIDGE_SELF_HOST` | `127.0.0.1` | host go2rtc uses to pull `/stream/<sn>` back from the bridge |
-| `BRIDGE_PREWARM` | off | `1` = speculatively open a camera's P2P session on a high-intent event (doorbell/person/pet/package) so a following live view starts instantly. Off by default — it holds a battery camera's radio open ~28s per event |
+| Env var            | Default                        | Meaning                                                                                                                                                                                                                               |
+| ------------------ | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EUFY_EMAIL`       | — (required)                   | eufy account email                                                                                                                                                                                                                    |
+| `EUFY_PASSWORD`    | — (required)                   | eufy account password                                                                                                                                                                                                                 |
+| `EUFY_COUNTRY`     | `GB`                           | two-letter account country (routes the region)                                                                                                                                                                                        |
+| `BRIDGE_HOST`      | `0.0.0.0`                      | interface the WS/HTTP binds to                                                                                                                                                                                                        |
+| `BRIDGE_PORT`      | `3000`                         | WS/HTTP control port                                                                                                                                                                                                                  |
+| `EUFY_POLL_MS`     | `600000` (10 min)              | how often the bridge polls the cloud for device state; `0` disables. Also changeable live from the HA integration / the `config.set` WS command                                                                                       |
+| `EUFY_SESSION`     | `/app/data/.eufy-session.json` | where the login token is persisted                                                                                                                                 | `SOLIX_EMAIL`      | — (optional)                    | Anker **Solix** account email — enables Solix support (power stations / smart meter). A **separate** account from the eufy one; needs `SOLIX_PASSWORD` too |
+| `SOLIX_PASSWORD`   | —                               | Solix account password (enables Solix together with `SOLIX_EMAIL`) |
+| `SOLIX_COUNTRY`    | `EUFY_COUNTRY`                  | two-letter Solix account country |
+| `SOLIX_SESSION`    | `/app/data/.solix-session.json` | where the Solix login token is persisted |                                                                   |
+| `GO2RTC_CONFIG`    | `/app/data/go2rtc.yaml`        | generated from the live device list at startup                                                                                                                                                                                        |
+| `GO2RTC_ENABLE`    | `1`                            | set to `0` to keep the bundled go2rtc process disabled                                                                                                                                                                                 |
+| `STREAM_IDLE_MS`   | `300000` (5 min)               | auto-off a camera's live P2P feed after this long with no detection event, even if HA still holds the stream "open" — stops the radio to save battery; the next detection reopens it. `0` disables                                    |
+| `RTSP_IDLE_OFF_MS` | `300000` (5 min)               | battery-saver: turn a **battery** camera's native `rtspStream` publish OFF after this long idle (no detection, no active bridge stream), so a forgotten `rtspStream=ON` can't drain it. Wired cameras are never touched. `0` disables |
+| `BRIDGE_DEBUG`     | off                            | `1` logs each incoming WS command, control-command timing, and P2P connect/close/ack — enough to trace the frontend↔SDK flow                                                                                                          |
+| `BRIDGE_DEBUG_P2P` | off                            | `1` additionally routes the SDK's raw per-frame transport logs (very noisy)                                                                                                                                                           |
+| `BRIDGE_EVENT_LOG` | **on**                         | prints a `[bridge:event]` line per push/semantic event: what it is, how many frontend clients it reached, and each "Last event" image fetch + result. Narrow (only real events), not the `BRIDGE_DEBUG` firehose. `0` silences        |
+| `BRIDGE_SELF_HOST` | `127.0.0.1`                    | host go2rtc uses to pull `/stream/<sn>` back from the bridge                                                                                                                                                                          |
+| `BRIDGE_PREWARM`   | off                            | `1` = speculatively open a camera's P2P session on a high-intent event (doorbell/person/pet/package) so a following live view starts instantly. Off by default — it holds a battery camera's radio open ~28s per event                |
 
 ---
 
@@ -139,8 +137,8 @@ See [`ws-protocol.md`](./ws-protocol.md) for the full WebSocket protocol.
 ## Notes
 
 - **Architecture:** the published `ghcr.io/mega-yfue/ha-eufy-sdk-bridge` image is a multi-arch manifest
-  (`linux/amd64`, `linux/arm64`, `linux/arm/v7`), so it runs on Raspberry Pi / HA OS on ARM as well as
-  x86. Republish it with `scripts/publish-multiarch.sh` (see the repo README's deploy note).
+  (`linux/amd64`, `linux/arm64` — 64-bit ARM like Raspberry Pi / HA OS as well as x86; `node:24-alpine`
+  has no 32-bit `arm/v7` base). Republish it with `scripts/publish-multiarch.sh` (see the README).
 - **Not host networking?** WebRTC needs UDP/ICE, which is awkward behind bridge networking. If you drop
   `network_mode: host`, publish the ports (`3000`, `1984`, `8554`, `8555/udp`) and expect to sort out
   WebRTC separately; control + snapshots + RTSP still work.

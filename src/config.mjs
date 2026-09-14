@@ -8,17 +8,43 @@ const truthy = (v) => /^(1|true|yes|on)$/i.test(String(v ?? ""));
 
 /** The SDK event names broadcast to every connected WS client. */
 export const FORWARDED_EVENTS = [
-  "motion", "personDetected", "strangerDetected", "doorbellPress", "petDetection",
-  "packageDelivered", "packageTaken", "packageStranded", "soundDetected", "cryingDetected",
-  "vehicleDetected", "dogDetected", "armingModeChanged", "alarm", "lockState",
-  "contactState", "batteryLevel", "batteryAlert", "ptzNotify", "smartLightState",
+  "motion",
+  "personDetected",
+  "strangerDetected",
+  "doorbellPress",
+  "petDetection",
+  "packageDelivered",
+  "packageTaken",
+  "packageStranded",
+  "soundDetected",
+  "cryingDetected",
+  "vehicleDetected",
+  "dogDetected",
+  "armingModeChanged",
+  "alarm",
+  "lockState",
+  "contactState",
+  "batteryLevel",
+  "batteryAlert",
+  "ptzNotify",
+  "smartLightState",
 ];
 
 // The "something happened" pushes (not battery/arming/state changes) — these keep a camera's live
 // feed warm and reset the battery rtspStream idle clock (see stream-idle.mjs).
 export const DETECTION_EVENTS = new Set([
-  "motion", "personDetected", "strangerDetected", "petDetection", "vehicleDetected", "dogDetected",
-  "doorbellPress", "packageDelivered", "packageTaken", "packageStranded", "soundDetected", "cryingDetected",
+  "motion",
+  "personDetected",
+  "strangerDetected",
+  "petDetection",
+  "vehicleDetected",
+  "dogDetected",
+  "doorbellPress",
+  "packageDelivered",
+  "packageTaken",
+  "packageStranded",
+  "soundDetected",
+  "cryingDetected",
 ]);
 
 export const PUSH_STALL_MS = 5 * 60_000;   // push down (or never up) this long ⇒ events are dead ⇒ recover
@@ -44,6 +70,7 @@ export function loadConfig(env = process.env) {
     // session / split push delivery. Set a unique value per bridge when you run more than one on an account.
     openudid: env.BRIDGE_OPENUDID || undefined,
     go2rtcConfig: env.GO2RTC_CONFIG || "./go2rtc.yaml",
+    go2rtcEnable: env.GO2RTC_ENABLE !== "0",
     selfHost: env.BRIDGE_SELF_HOST || "127.0.0.1",
     // Cloud poll interval (ms). Unset → the SDK default (600000 = 10 min). Changeable live via the
     // config.set WS command. 0 disables polling.
@@ -68,9 +95,7 @@ export function loadConfig(env = process.env) {
     // holds a battery camera's radio open for ~28s per event. Set BRIDGE_PREWARM=1 to enable the SDK's
     // default pre-warm events.
     prewarm: truthy(env.BRIDGE_PREWARM),
-    // Optional Anker Solix support — a SEPARATE Anker account (its own login + device backend), enabled
-    // only when both SOLIX_EMAIL and SOLIX_PASSWORD are set. Independent of the eufy client; its own
-    // persisted session file. Country falls back to the eufy country.
+    // Optional Anker Solix support — enabled only when both credentials are set.
     solix:
       env.SOLIX_EMAIL && env.SOLIX_PASSWORD
         ? {
