@@ -167,6 +167,38 @@ device's capabilities expose (e.g. `statusLed`, `nightVision`, guard-mode `mode`
 { "id": 6, "ok": false, "error": "device … does not support 'statusLed'" }
 ```
 
+### `device.action`
+Invoke a capability **action** — a typed method that isn't a scalar writable property, so `device.set`
+can't reach it. `args` is the positional argument list (omitted = none). Only methods the SDK's own
+capability surfaces expose are reachable; today those are `smart_light`, `camera` and `ptz`.
+*(Requires auth.)*
+
+A **dotted** `action` walks a sub-API namespace: every segment before the last one hands back a
+namespace without acting (so it takes no arguments), and only the final segment receives `args`.
+`preset.goto` is therefore `dev.ptz().preset().goto(id)`.
+
+```jsonc
+// one pan-tilt step — the four verbs are `left` / `right` / `up` / `down`, all no-arg →
+{ "id": 7, "cmd": "device.action", "sn": "EXAMPLE-CAM-0001", "action": "left" }
+// ←
+{ "id": 7, "ok": true, "result": null }
+
+// move to stored preset 3 →
+{ "id": 8, "cmd": "device.action", "sn": "EXAMPLE-CAM-0001", "action": "preset.goto", "args": [3] }
+// save the camera's current position into preset 3 →
+{ "id": 9, "cmd": "device.action", "sn": "EXAMPLE-CAM-0001", "action": "preset.save", "args": [3] }
+
+// a verb no surface carries →
+{ "id": 10, "ok": false, "error": "no action 'calibrate' on EXAMPLE-CAM-0001" }
+```
+
+PTZ movement is **fire-and-forget**: P2P sends no acknowledgement, so `ok: true` means the frame left
+for the camera, not that it finished moving. Where the camera ended up arrives separately as a
+`ptzNotify` event. The preset write verbs are fire-and-forget the same way, and referencing an **empty
+slot is a silent no-op** — `goto`/`save`/`delete` on an unpopulated id do nothing and report no error.
+Only cameras whose `capabilities` include `ptz` carry these verbs; asking a fixed camera fails with
+`no action`.
+
 ### `device.reboot`
 Reboot a **HomeBase / station** (maps to the SDK's `reboot`). Only devices with `canReboot: true` accept
 it; the SDK throws for a non-hub serial. The hub drops offline for a minute or two, then rejoins.
@@ -340,8 +372,13 @@ raw video protocol.
 ---
 
 ## Not yet exposed
-- Capability **action** verbs (PTZ move, siren test, talkback) — only property writes via `device.set`
-  today.
+- Capability **action** verbs beyond the `smart_light` / `camera` / `ptz` surfaces `device.action`
+  routes today (e.g. siren test, talkback).
+- PTZ **zoom** (`zoom`) and the preset **read** verbs (`preset.list` / `preset.image`): both exist on
+  the SDK surface and `device.action` would route them, but zoom needs a second telephoto lens and the
+  read verbs answer over P2P request/reply, so neither is exercised here yet.
+- Raw P2P command ids that the SDK never promotes to a capability member — pan **calibration**
+  (`CMD_INDOOR_PAN_CALIBRATION` 6017 / `CMD_OUTDOOR_PAN_CALIBRATION` 6251) is the notable one.
 - Guard / station security mode (arm home/away/disarm).
 - Per-device event subscription/filtering (events broadcast to all clients).
 - Audio / recording / timelapse.

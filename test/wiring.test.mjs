@@ -18,10 +18,29 @@ import { createHttpHandler } from "../src/http-routes.mjs";
 import { createWsServer } from "../src/ws-server.mjs";
 
 function fakeEufy() {
+  // Mirrors the SDK's `ptz` surface: bare no-arg movement verbs, plus a `preset()` member that
+  // ANSWERS — it hands back the sub-API namespace without acting. Those are the two shapes
+  // `device.action` has to route, so the fake carries both and records what it was asked to do.
+  const ptzCalls = [];
+  const ptzSurface = {
+    left: async () => void ptzCalls.push(["left"]),
+    right: async () => void ptzCalls.push(["right"]),
+    up: async () => void ptzCalls.push(["up"]),
+    down: async () => void ptzCalls.push(["down"]),
+    preset: () => ({
+      goto: async (id) => void ptzCalls.push(["preset.goto", id]),
+      save: async (id) => void ptzCalls.push(["preset.save", id]),
+    }),
+  };
   const devices = {
     CAM1: {
       describe: () => ({ sn: "CAM1", name: "Cam", model: "T8410", modelName: "Indoor", codec: "camera", capabilities: ["camera", "video", "battery"] }),
       getProperties: () => ({ battery: { value: 74 }, motion: { value: false } }),
+    },
+    PTCAM1: {
+      describe: () => ({ sn: "PTCAM1", name: "Pan cam", model: "T8425", modelName: "Indoor Cam Pan & Tilt", codec: "camera", capabilities: ["camera", "video", "ptz"] }),
+      getProperties: () => ({ battery: { value: 50 } }),
+      ptz: () => ptzSurface,
     },
     SENSOR1: {
       describe: () => ({ sn: "SENSOR1", name: "Sensor", model: "T8900", modelName: "Entry", codec: "sensor", capabilities: ["contact", "battery"] }),
@@ -29,8 +48,9 @@ function fakeEufy() {
     },
   };
   return {
+    ptzCalls, // what the fake ptz surface was asked to do, for the device.action test
     pollIntervalMs: 600000,
-    async getDevices() { return [{ sn: "CAM1" }, { sn: "SENSOR1" }]; },
+    async getDevices() { return [{ sn: "CAM1" }, { sn: "PTCAM1" }, { sn: "SENSOR1" }]; },
     async getDevice(sn) { const d = devices[sn]; if (!d) throw new Error(`no device ${sn}`); return d; },
     setPollInterval(ms) { this.pollIntervalMs = ms; },
     on() {}, // event wiring is a no-op in the smoke harness (completeBoot isn't run)
@@ -66,7 +86,7 @@ test("device view: describe shape + camera vs sensor", async () => {
   const list = await ctx.deviceList();
   const cam = list.find((d) => d.sn === "CAM1");
   const sensor = list.find((d) => d.sn === "SENSOR1");
-  assert.equal(list.length, 2);
+  assert.equal(list.length, 3);
   assert.equal(cam.stream, "/stream/CAM1");
   assert.equal(cam.streaming, false); // nothing piping
   assert.equal(cam.canReboot, false);
@@ -102,7 +122,7 @@ test("ws: auth.status, unknown cmd, and the auth gate", async () => {
   state.flags.ready = true;
   const listed = await wsCall(ctx, { id: 4, cmd: "devices.list" });
   assert.equal(listed[0].ok, true);
-  assert.equal(listed[0].devices.length, 2);
+  assert.equal(listed[0].devices.length, 3);
   assert.deepEqual((await wsCall(ctx, { id: 5, cmd: "config.get" }))[0], { id: 5, ok: true, pollMs: 600000 });
   httpServer.close();
 });
@@ -119,5 +139,37 @@ test("http: /healthz reports ok + auth + empty streaming", async () => {
   assert.deepEqual(out.auth, { state: "pending" });
   assert.deepEqual(out.streaming, []);
   assert.equal(out.streamIdleMs, 300000);
+  httpServer.close();
+});
+
+test("ws: device.action reaches the ptz surface, bare verbs and dotted preset paths", async () => {
+  const { ctx, state, httpServer } = buildCtx();
+  state.flags.ready = true;
+
+  // A bare verb resolves straight off `dev.ptz()` — one d-pad press, no arguments.
+  const left = await wsCall(ctx, { id: 1, cmd: "device.action", sn: "PTCAM1", action: "left" });
+  assert.equal(left[0].ok, true);
+
+  // A dotted action walks the namespace: `preset()` is called with nothing, `goto` gets the args.
+  const goto = await wsCall(ctx, { id: 2, cmd: "device.action", sn: "PTCAM1", action: "preset.goto", args: [3] });
+  assert.equal(goto[0].ok, true);
+  assert.deepEqual(ctx.eufy.ptzCalls, [["left"], ["preset.goto", 3]]);
+
+  // A verb no surface carries is refused, not thrown: `calibrate` is a raw P2P command id in the
+  // SDK, never promoted to a capability member, so a host asking for it gets a clean error.
+  const bogus = await wsCall(ctx, { id: 3, cmd: "device.action", sn: "PTCAM1", action: "calibrate" });
+  assert.equal(bogus[0].ok, false);
+  assert.match(bogus[0].error, /no action 'calibrate'/);
+
+  // Same for a dotted path whose leaf is missing — walking the namespace must not mask the failure.
+  const badLeaf = await wsCall(ctx, { id: 4, cmd: "device.action", sn: "PTCAM1", action: "preset.nope" });
+  assert.equal(badLeaf[0].ok, false);
+  assert.match(badLeaf[0].error, /no action 'preset.nope'/);
+
+  // A fixed camera exposes no ptz surface at all, so movement is refused there too.
+  const fixed = await wsCall(ctx, { id: 5, cmd: "device.action", sn: "CAM1", action: "left" });
+  assert.equal(fixed[0].ok, false);
+  assert.match(fixed[0].error, /no action 'left'/);
+
   httpServer.close();
 });
