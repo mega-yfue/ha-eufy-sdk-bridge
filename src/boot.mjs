@@ -11,6 +11,7 @@ export function createBoot(ctx) {
 
   /** Spawn the bundled go2rtc against the generated config. Non-fatal if the binary isn't present (dev). */
   function startGo2rtc() {
+    if (!cfg.go2rtcEnable) return;
     if (flags.go2rtcProc) return;
     try {
       flags.go2rtcProc = spawn("go2rtc", ["-config", cfg.go2rtcConfig], { stdio: "inherit" });

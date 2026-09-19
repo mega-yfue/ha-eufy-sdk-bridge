@@ -103,6 +103,7 @@ Point the integration at this host's IP and `BRIDGE_PORT`.
 | `SOLIX_RETRY_BASE_MS` | `900000` (15 min) | starting delay for the Solix login self-heal backoff after a failed login — doubles per consecutive failure, capped at `SOLIX_RETRY_MAX_MS`. Kept well past the login-throttle window; Anker throttles frequent logins and can escalate to a captcha |
 | `SOLIX_RETRY_MAX_MS` | `3600000` (1 h) | cap for the escalating Solix login-retry backoff |
 | `GO2RTC_CONFIG` | `/app/data/go2rtc.yaml` | generated from the live device list at startup |
+| `GO2RTC_ENABLE` | **on** | `0` disables spawning the bundled go2rtc process (e.g. using the one from Frigate) |
 | `STREAM_IDLE_MS` | `300000` (5 min) | auto-off a camera's live P2P feed after this long with no detection event, even if HA still holds the stream "open" — stops the radio to save battery; the next detection reopens it. `0` disables |
 | `RTSP_IDLE_OFF_MS` | `300000` (5 min) | battery-saver: turn a **battery** camera's native `rtspStream` publish OFF after this long idle (no detection, no active bridge stream), so a forgotten `rtspStream=ON` can't drain it. Wired cameras are never touched. `0` disables |
 | `STREAM_FAIL_BACKOFF_MS` | `30000` (30 s) | battery-saver: after a live-stream open **fails** (P2P connect timeout / no P2P endpoint), refuse to reopen that camera for this window — doubling per consecutive failure, capped at 5 min — so go2rtc's ~30 s ffmpeg retries return a fast 503 instead of waking the camera radio on every retry. Cleared by a successful open or a detection. `0` disables |
