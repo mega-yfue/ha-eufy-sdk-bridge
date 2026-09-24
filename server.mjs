@@ -84,6 +84,19 @@ eufy.on("pushDisconnect", () => {
   state.flags.pushSince = Date.now();
 });
 
+// eufy answers a wrong country with the same `200/26108 Email address or password incorrect`
+// it uses for a genuinely wrong password, which sends people to debug the one thing that isn't
+// wrong (#60). The upstream code doesn't separate the two cases, so don't pretend to — just
+// name the other candidate, since it is the one nobody thinks of.
+const COUNTRY_HINT =
+  " (if the credentials are definitely right, check EUFY_COUNTRY: it must be the country the" +
+  " account was registered in)";
+
+function loginFailureHint(e) {
+  const msg = String(e?.message ?? e);
+  return /26108|password incorrect/i.test(msg) ? msg + COUNTRY_HINT : msg;
+}
+
 // ── boot ───────────────────────────────────────────────────────────────────────────────────────────
 async function main() {
   // Serve FIRST — the WS must be reachable so a client can drive 2FA/captcha before we're authed.
@@ -91,7 +104,7 @@ async function main() {
   try {
     await ctx.applyLogin(await eufy.login());
   } catch (e) {
-    console.error(`[bridge] login attempt failed: ${e?.message ?? e} — retry via WS 'auth.retrigger'`);
+    console.error(`[bridge] login attempt failed: ${loginFailureHint(e)} — retry via WS 'auth.retrigger'`);
   }
   if (state.flags.ready) console.log("[bridge] logged in from a stored session");
   else
