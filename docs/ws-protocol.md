@@ -381,6 +381,13 @@ Fired when a camera's live P2P feed opens (`active: true`) or is torn down / idl
 | `GET /snapshot/<sn>` | a JPEG still (`image/jpeg`). _Requires auth._                                                     |
 | `GET /stream/<sn>`   | live Annex-B H.264/H.265 (`video/H264`) — what go2rtc pulls. _Requires auth._                     |
 
+`GET /snapshot/<sn>` uses `SNAPSHOT_LIVE` when no mode is supplied. A request may use `?mode=auto` for
+the automatic battery-capability policy, `?mode=stored` to avoid live acquisition and use retained or
+persisted imagery, or `?mode=live` to attempt live acquisition first while retaining stored/persisted
+fallback behavior. The mode applies only to that request and does not modify `SNAPSHOT_LIVE` or other
+bridge configuration. `mode=live` is an acquisition preference, not a guarantee that the returned
+JPEG came from the live attempt. Invalid, empty, or duplicate `mode` parameters return HTTP 400.
+
 go2rtc (bundled) turns `/stream/<sn>` into RTSP / WebRTC / MSE / HLS, so the frontend never speaks the
 raw video protocol.
 

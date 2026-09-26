@@ -99,6 +99,15 @@ export function createHttpHandler(ctx) {
     // thumbnail: without it every still is a 502 after a 10-20s wake, and the caller (HA, HomeKit) then
     // falls back to pulling video — waking the camera again for a picture we already have on disk.
     if (kind === "snapshot" && sn) {
+      const snapshotModes = url.searchParams.getAll("mode");
+      if (snapshotModes.length > 1) {
+        return json(res, 400, { error: "snapshot mode must be specified at most once" });
+      }
+      const snapshotMode = snapshotModes[0] ?? null;
+      if (snapshotMode != null && !["auto", "stored", "live"].includes(snapshotMode)) {
+        return json(res, 400, { error: "invalid snapshot mode", mode: snapshotMode });
+      }
+
       // Two pictures can sit on disk: the last event's thumbnail, and the last frame of a stream someone
       // watched (live-still.mjs). Either may be the more recent one, so serve whichever is newer.
       const candidates = [
@@ -131,19 +140,42 @@ export function createHttpHandler(ctx) {
         const device = await eufy.getDevice(sn);
         const cam = device.camera?.();
         if (!cam) return json(res, 404, { error: "no camera on this device" });
-        // A battery camera pays a radio wake for every still; a mains one does not. Same test the idle
+        // A battery-capable camera pays a radio wake for every still; one without that capability does not. Same test the idle
         // watcher uses (see stream-idle.mjs), so "which cameras are expensive" is decided in one way.
         const onBattery = (device.describe?.()?.capabilities ?? []).includes("battery");
-        const wantLive = cfg.snapshotLive === "auto" ? !onBattery : cfg.snapshotLive;
+        let wantLive = cfg.snapshotLive === "auto" ? !onBattery : cfg.snapshotLive;
+        switch (snapshotMode) {
+          case "live":
+            wantLive = true;
+            break;
+          case "stored":
+            wantLive = false;
+            break;
+          case "auto":
+            wantLive = !onBattery;
+            break;
+        }
+
+        let why = "";
+        if (!wantLive) {
+          if (snapshotMode === "stored") {
+            why = "live burst disabled (mode=stored)";
+          } else if (snapshotMode === "auto") {
+            why = "live burst disabled by explicit mode=auto for battery-capable camera";
+          } else if (cfg.snapshotLive === "auto") {
+            why = "battery-capable camera — no live burst (SNAPSHOT_LIVE=auto)";
+          } else {
+            why = "live burst disabled (SNAPSHOT_LIVE=0)";
+          }
+        }
         let jpeg;
-        let why =
-          cfg.snapshotLive === "auto"
-            ? "battery camera — no live burst (SNAPSHOT_LIVE=auto)"
-            : "live burst disabled (SNAPSHOT_LIVE=0)";
         if (wantLive) {
           try {
             ({ jpeg } = await cam.snapshotLive());
-            why = "";
+            if (!jpeg) {
+              if (snapshotMode === "live") why = "live burst produced no usable image";
+              else if (snapshotMode === "auto") why = "mode=auto live burst produced no usable image";
+            }
           } catch (e) {
             why = `live burst failed: ${e?.message ?? e}`;
           }
@@ -157,7 +189,8 @@ export function createHttpHandler(ctx) {
           try {
             jpeg = await cam.snapshotStored?.(); // may throw when nothing is retained
           } catch (e) {
-            why = `${why}; nothing retained: ${e?.reason ?? e?.message ?? e}`;
+            const reason = `nothing retained: ${e?.reason ?? e?.message ?? e}`;
+            why = why ? `${why}; ${reason}` : reason;
           }
         }
         if (jpeg) {
