@@ -147,13 +147,21 @@ export function createWsServer(ctx, httpServer) {
           const args = Array.isArray(msg.args) ? msg.args : [];
           const dev = await eufy.getDevice(msg.sn);
           // Capability surfaces that expose actions. Add more accessors here as needed.
-          const surfaces = [dev.smartLight?.(), dev.camera?.(), dev.lock?.(), dev.siren?.()].filter(Boolean);
-          const surface = surfaces.find((s) => typeof s?.[action] === "function");
-          if (!surface) return fail(`no action '${action}' on ${msg.sn}`);
+          const surfaces = [dev.smartLight?.(), dev.camera?.(), dev.lock?.(), dev.siren?.(), dev.ptz?.()].filter(
+            Boolean,
+          );
+          // A dotted action walks a sub-API namespace: `preset.goto` is `ptz().preset().goto(id)`.
+          // Every segment before the leaf ANSWERS — it hands back the namespace without acting — so it
+          // takes no arguments; only the leaf is called with `args`.
+          const path = action.split(".");
+          const leaf = path.pop();
+          let target = surfaces.find((s) => typeof s?.[path[0] ?? leaf] === "function");
+          for (const seg of path) target = typeof target?.[seg] === "function" ? target[seg]() : undefined;
+          if (typeof target?.[leaf] !== "function") return fail(`no action '${action}' on ${msg.sn}`);
           const t0 = Date.now();
           dbg(`device.action → ${action} sn=${msg.sn} args=${JSON.stringify(args)}`);
           try {
-            const result = await surface[action](...args);
+            const result = await target[leaf](...args);
             dbg(`device.action OK ${action} sn=${msg.sn} (${Date.now() - t0}ms)`);
             return reply({ result: result ?? null });
           } catch (e) {

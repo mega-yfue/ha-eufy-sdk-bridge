@@ -178,19 +178,33 @@ device's capabilities expose (e.g. `statusLed`, `nightVision`, guard-mode `mode`
 
 Invoke a capability **action** — a typed method that is not a scalar property, so `device.set` cannot
 reach it. `{ sn, action, args? }`, where `args` is the positional argument list. Only methods a
-capability surface exposes are reachable; today those surfaces are `smart_light`, `camera`, `lock` and
-`siren`. _(Requires auth.)_
+capability surface exposes are reachable; today those surfaces are `smart_light`, `camera`, `lock`,
+`siren` and `ptz`. _(Requires auth.)_
+
+A **dotted** `action` walks a sub-API namespace: every segment before the last one hands back a
+namespace without acting (so it takes no arguments), and only the final segment receives `args`.
+`preset.goto` is therefore `dev.ptz().preset().goto(id)`.
 
 ```jsonc
-// sound the alarm for 10 s — a HomeBase, or a camera attached to one
-{ "id": 9, "cmd": "device.action", "sn": "EXAMPLE-CAM-0001", "action": "trigger", "args": [10] }
+// one pan-tilt step — the four verbs are `left` / `right` / `up` / `down`, all no-arg →
+{ "id": 7, "cmd": "device.action", "sn": "EXAMPLE-CAM-0001", "action": "left" }
 // ←
-{ "id": 9, "ok": true, "result": null }
-// stop it before the duration runs out
+{ "id": 7, "ok": true, "result": null }
+// move to stored preset 3 →
+{ "id": 8, "cmd": "device.action", "sn": "EXAMPLE-CAM-0001", "action": "preset.goto", "args": [3] }
+// sound the alarm for 10 s — a HomeBase, or a camera attached to one →
+{ "id": 9, "cmd": "device.action", "sn": "EXAMPLE-CAM-0001", "action": "trigger", "args": [10] }
+// stop it before the duration runs out →
 { "id": 10, "cmd": "device.action", "sn": "EXAMPLE-CAM-0001", "action": "stop" }
 // no surface on this device carries the verb →
-{ "id": 11, "ok": false, "error": "no action 'trigger' on EXAMPLE-CAM-0002" }
+{ "id": 11, "ok": false, "error": "no action 'calibrate' on EXAMPLE-CAM-0002" }
 ```
+
+PTZ movement is **fire-and-forget**: P2P sends no acknowledgement, so `ok: true` means the frame left
+for the camera, not that it finished moving. Where the camera ended up arrives separately as a
+`ptzNotify` event. The preset write verbs are fire-and-forget the same way, and referencing an **empty
+slot is a silent no-op** — `goto`/`save`/`delete` on an unpopulated id do nothing and report no error.
+Only cameras whose `capabilities` include `ptz` carry these verbs.
 
 The siren verbs install only where the SDK has evidence for a wire: a HomeBase reporting hub-alarm
 params, a camera attached to one that reports the EAS slot, or a standalone siren (`stop` only, plus
@@ -388,7 +402,12 @@ raw video protocol.
 
 ## Not yet exposed
 
-- Capability **action** verbs beyond the surfaces `device.action` routes today (PTZ move, talkback).
+- Capability **action** verbs beyond the surfaces `device.action` routes today (e.g. talkback).
+- PTZ **zoom** (`zoom`) and the preset **read** verbs (`preset.list` / `preset.image`): both exist on
+  the SDK surface and `device.action` would route them, but zoom needs a second telephoto lens and the
+  read verbs answer over P2P request/reply, so neither is exercised here yet.
+- Raw P2P command ids that the SDK never promotes to a capability member — pan **calibration**
+  (`CMD_INDOOR_PAN_CALIBRATION` 6017 / `CMD_OUTDOOR_PAN_CALIBRATION` 6251) is the notable one.
 - Guard / station security mode (arm home/away/disarm).
 - Per-device event subscription/filtering (events broadcast to all clients).
 - Audio / recording / timelapse.
