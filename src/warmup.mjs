@@ -5,7 +5,7 @@
 // refresh into one at-a-time queue. Kicked off the boot critical path (they don't gate `ready`).
 import fs from "node:fs";
 import path from "node:path";
-import { parseFaceRoster, firstJsonObject } from "./faces.mjs";
+import { rosterEntry, firstJsonObject } from "./faces.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -229,36 +229,26 @@ export function createWarmup(ctx) {
   }
 
   /**
-   * Build the face-recognition roster by reading `person_basic_info` off each connected HomeBase over P2P
-   * (CMD_DATABASE 1306 / inner cmd 10000, mChannel 255). Faces are account-wide, so every station's rows
-   * merge into one map. On any failure the map just stays smaller and `personDetected` falls back to Unknown.
+   * Build the face-recognition roster from each connected HomeBase's own `person_basic_info` table, read by
+   * the SDK (`getStationFaces`). Faces are account-wide, so every station's rows merge into one map. Runs
+   * under the DB lock: the SDK's read shares the session's `dbChunk` stream with the history reads here.
+   * A station that fails just contributes nothing, and `personDetected` falls back to Unknown for its ids.
    */
   async function warmFaceRoster() {
     return withDbLock(async () => {
-      try {
-        const devs = await eufy.getDevices();
-        const accountId = await accountIdOf(devs);
-        for (const [, session] of await awaitSessions()) {
-          for (let i = 0; i < 30 && !session.isConnected; i++) await sleep(500);
-          if (!session.isConnected) continue;
-
-          let chunk = "";
-          const onChunk = ({ text }) => (chunk += text);
-          session.on("dbChunk", onChunk);
-          session.requestFaces({ accountId });
-          setTimeout(() => session.isConnected && session.requestFaces({ accountId }), 1500);
-          await sleep(6000);
-          session.off?.("dbChunk", onChunk);
-
+      for (const [stationSn] of await awaitSessions()) {
+        try {
           let added = 0;
-          for (const [id, rec] of parseFaceRoster(chunk)) {
-            if (!faceNames.has(id)) added++;
-            faceNames.set(id, rec);
+          for (const row of await eufy.getStationFaces(stationSn)) {
+            const entry = rosterEntry(row);
+            if (!entry) continue;
+            if (!faceNames.has(entry[0])) added++;
+            faceNames.set(...entry);
           }
           if (added) console.log(`[bridge] face roster: +${added} person(s) (${faceNames.size} total)`);
+        } catch (e) {
+          console.error(`[bridge] face roster from ${stationSn} failed: ${e?.message ?? e}`);
         }
-      } catch (e) {
-        console.error(`[bridge] warm face roster failed: ${e?.message ?? e}`);
       }
     });
   }
