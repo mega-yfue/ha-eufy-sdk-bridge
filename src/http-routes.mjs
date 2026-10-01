@@ -1,5 +1,5 @@
 // HTTP surface: live video (go2rtc pulls /stream/<sn>), a snapshot still, the persisted last-event
-// thumbnail, and /healthz. Video is deliberately OFF the WS — connecting to /stream is what opens the
+// thumbnail, the latest detection's stored clip, and /healthz. Video is deliberately OFF the WS — connecting to /stream is what opens the
 // camera, disconnecting is what stops it, so there's no "is it streaming" flag to drift. Returns the
 // request handler; server.mjs wraps it in http.createServer.
 import fs from "node:fs";
@@ -250,6 +250,17 @@ export function createHttpHandler(ctx) {
           return json(res, 404, { error: String(e?.message ?? e), reason: e?.reason });
         }
       }
+    }
+
+    // The recording a HomeBase 2 stored for this camera's latest detection, as an mp4 (see clip.mjs).
+    if (kind === "clip" && sn) {
+      const clip = (await ctx.clipFor?.(sn)) ?? { status: 404, error: "clips unavailable" };
+      if (!clip.mp4) {
+        ctx.eventLog?.(`/clip ${sn} → ${clip.status} ${clip.reason ?? clip.error}`);
+        return json(res, clip.status, { error: clip.error, reason: clip.reason });
+      }
+      res.writeHead(200, { "content-type": "video/mp4", "content-length": clip.mp4.length });
+      return res.end(clip.mp4);
     }
 
     if (kind === "stream" && sn) {

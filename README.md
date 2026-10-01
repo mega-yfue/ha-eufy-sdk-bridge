@@ -13,6 +13,7 @@ bundled, so live camera video is available as RTSP / WebRTC / MSE / HLS with not
 WS    :3000/ws             control, state, events     ← the frontend talks to this
 HTTP  :3000/stream/<sn>    live video (Annex-B)       ← go2rtc pulls this
 HTTP  :3000/snapshot/<sn>  a JPEG still
+HTTP  :3000/clip/<sn>      the latest detection's recording, as an mp4 (HomeBase 2)
 HTTP  :3000/healthz        which cameras are streaming
 ```
 

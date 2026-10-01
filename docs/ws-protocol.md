@@ -441,6 +441,7 @@ Fired when a camera's live P2P feed opens (`active: true`) or is torn down / idl
 | `GET /healthz`       | `{ ok, schemaVersion, auth: { state }, streaming: [sn,…] }` — always available (even before auth) |
 | `GET /snapshot/<sn>` | a JPEG still (`image/jpeg`). _Requires auth._                                                     |
 | `GET /stream/<sn>`   | live Annex-B H.264/H.265 (`video/H264`) — what go2rtc pulls. _Requires auth._                     |
+| `GET /clip/<sn>`     | the latest detection's HomeBase 2 recording (`video/mp4`). _Requires auth._                       |
 
 `GET /snapshot/<sn>` uses `SNAPSHOT_LIVE` when no mode is supplied. A request may use `?mode=auto` for
 the automatic battery-capability policy, `?mode=stored` to avoid live acquisition and use retained or
@@ -448,6 +449,12 @@ persisted imagery, or `?mode=live` to attempt live acquisition first while retai
 fallback behavior. The mode applies only to that request and does not modify `SNAPSHOT_LIVE` or other
 bridge configuration. `mode=live` is an acquisition preference, not a guarantee that the returned
 JPEG came from the live attempt. Invalid, empty, or duplicate `mode` parameters return HTTP 400.
+
+`GET /clip/<sn>` downloads the recording the camera's latest push named, over the station's P2P session
+(the camera is not woken), and muxes it with ffmpeg. It waits until `CLIP_SETTLE_MS` has passed since
+that push, then keeps the clip until the next one. It answers 404 on a camera without stored recordings
+(anything but a HomeBase 2 camera), 409 when no push has named a recording since the bridge started, and
+502 with the SDK's `reason` when the download fails.
 
 go2rtc (bundled) turns `/stream/<sn>` into RTSP / WebRTC / MSE / HLS, so the frontend never speaks the
 raw video protocol.

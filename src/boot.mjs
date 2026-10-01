@@ -85,6 +85,7 @@ export function createBoot(ctx) {
         eufy.on("p2pClose", (sn) => dbg(`p2pClose station=${sn}`));
         eufy.on("commandAck", (info) => dbg(`commandAck ${JSON.stringify(info)}`));
       }
+      eufy.on("push", (ev) => ctx.noteRecording?.(ev)); // the recording a detection named, for /clip
       for (const e of FORWARDED_EVENTS)
         eufy.on(e, (payload) => {
           ctx.bumpActivity();
