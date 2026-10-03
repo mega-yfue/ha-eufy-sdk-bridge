@@ -13,7 +13,10 @@
 // which this whole file collapses to reusing the one control client.
 import { EufyMega, FileSessionStore, LoginStatus } from "@mega-yfue/eufy-sdk";
 
-const clients = new Map(); // sn -> EufyMega
+// sn -> Promise<EufyMega>. The PROMISE is cached, not the finished client: two first calls for one camera
+// (e.g. an ffmpeg retry overlapping the first pull while the cold login runs) must share one login, or the
+// client cached first is overwritten and never disconnected.
+const clients = new Map();
 
 /**
  * Options for a stream-only client. Exported so the realtime opt-out is testable without a login.
@@ -36,19 +39,31 @@ export function streamClientOptions(cfg) {
   };
 }
 
+const createStreamClient = (cfg) => new EufyMega(streamClientOptions(cfg));
+
 /** Get (or lazily create + hydrate) the dedicated stream client for a camera. */
-export async function streamClientFor(sn, cfg) {
-  let client = clients.get(sn);
-  if (client) return client;
-  client = new EufyMega(streamClientOptions(cfg));
-  client.on("error", (e) => console.error(`[bridge] stream(${sn}) sdk error: ${e?.message ?? e}`));
-  const result = await client.login();
-  if (result.status !== LoginStatus.Ok) {
-    clients.delete(sn);
-    throw new Error(`stream client for ${sn} could not hydrate session (${result.status})`);
-  }
-  clients.set(sn, client);
-  return client;
+export function streamClientFor(sn, cfg, create = createStreamClient) {
+  const cached = clients.get(sn);
+  if (cached) return cached;
+  const pending = (async () => {
+    const client = create(cfg);
+    client.on("error", (e) => console.error(`[bridge] stream(${sn}) sdk error: ${e?.message ?? e}`));
+    try {
+      const result = await client.login();
+      if (result.status !== LoginStatus.Ok)
+        throw new Error(`stream client for ${sn} could not hydrate session (${result.status})`);
+      return client;
+    } catch (e) {
+      void client.disconnect?.().catch(() => {}); // a failed login leaves nothing behind
+      throw e;
+    }
+  })();
+  clients.set(sn, pending);
+  // A failed login must not stay cached — but only evict our own entry, never one that replaced it.
+  pending.catch(() => {
+    if (clients.get(sn) === pending) clients.delete(sn);
+  });
+  return pending;
 }
 
 /**
@@ -60,15 +75,25 @@ export async function streamClientFor(sn, cfg) {
  * bridge attempt failed, and only a bridge restart (which empties this map) recovered it.
  */
 export function dropStreamClient(sn) {
-  const client = clients.get(sn);
-  if (!client) return false;
+  const pending = clients.get(sn);
+  if (!pending) return false;
   clients.delete(sn);
-  void client.disconnect?.().catch(() => {}); // best-effort; the next open builds a new one regardless
+  // Best-effort; the next open builds a new one regardless. A login still in flight is disconnected once
+  // it settles (a failed one already cleaned up after itself).
+  pending.then((c) => c.disconnect?.()).catch(() => {});
   return true;
 }
 
-/** Tear down every stream client (on shutdown). */
-export async function closeStreamClients() {
-  await Promise.all([...clients.values()].map((c) => c.disconnect?.().catch(() => {})));
+/**
+ * Tear down every stream client (on shutdown). A login still in flight is disconnected once it settles,
+ * but shutdown waits for that at most `waitMs` — a hanging login must not hold the process open.
+ */
+export async function closeStreamClients(waitMs = 2000) {
+  const pending = [...clients.values()];
   clients.clear();
+  const closing = Promise.all(pending.map((p) => p.then((c) => c.disconnect?.()).catch(() => {})));
+  let timer;
+  const bound = new Promise((r) => (timer = setTimeout(r, waitMs)));
+  await Promise.race([closing, bound]);
+  clearTimeout(timer);
 }
