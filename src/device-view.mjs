@@ -10,6 +10,20 @@ export function createDeviceView(ctx) {
   const unobservable = ctx.unobservableMembers ?? unobservableMembers;
   const { streaming } = ctx.state;
 
+  // The SDK keeps handed-out Device objects weakly. propertyChanged is announced
+  // against the live Device instance, so a long-lived bridge must keep the devices
+  // it exposes strongly reachable for as long as they remain in the account.
+  const heldDevices = new Map();
+
+  async function heldDevice(sn) {
+    let dev = heldDevices.get(sn);
+    if (!dev) {
+      dev = await eufy.getDevice(sn);
+      heldDevices.set(sn, dev);
+    }
+    return dev;
+  }
+
   /**
    * Build the host-facing summary of one device: identity + capabilities + a stream path for a camera.
    *
@@ -18,7 +32,7 @@ export function createDeviceView(ctx) {
    * as its model — no cross-referencing the device list.
    */
   async function describeDevice(sn) {
-    const dev = await eufy.getDevice(sn);
+    const dev = await heldDevice(sn);
     const m = dev.describe();
     const isCamera = m.capabilities.includes("camera") || m.capabilities.includes("video");
     return {
@@ -148,6 +162,12 @@ export function createDeviceView(ctx) {
 
   async function deviceList() {
     const devices = await eufy.getDevices();
+
+    const present = new Set(devices.map((d) => d.sn));
+    for (const sn of heldDevices.keys()) {
+      if (!present.has(sn)) heldDevices.delete(sn);
+    }
+
     return Promise.all(
       devices.map((d) => describeDevice(d.sn).catch((e) => ({ sn: d.sn, error: String(e?.message ?? e) }))),
     );
