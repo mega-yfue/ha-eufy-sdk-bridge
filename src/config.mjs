@@ -13,6 +13,7 @@ const positiveInt = (v) => {
 
 /** The SDK event names broadcast to every connected WS client. */
 export const FORWARDED_EVENTS = [
+  "propertyChanged",
   "motion",
   "personDetected",
   "strangerDetected",
