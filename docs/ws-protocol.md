@@ -336,6 +336,9 @@ Complete a pending Solix 2FA (only when `state == "2fa"`). The code is never log
 
 Each carries the SDK's event payload (typically `deviceSn` / `stationSn` plus event-specific fields).
 
+`propertyChanged` carries `deviceSn`, `property`, and, when available, the new `value`.
+If `value` is absent, consumers should re-read state rather than inventing a value.
+
 ```json
 { "event": "motion", "deviceSn": "EXAMPLE-CAM…", "stationSn": "EXAMPLE-HB…" }
 { "event": "contactState", "deviceSn": "EXAMPLE-SENSOR…", "open": true }
@@ -343,7 +346,7 @@ Each carries the SDK's event payload (typically `deviceSn` / `stationSn` plus ev
 { "event": "doorbellPress", "deviceSn": "EXAMPLE-DOORBELL…" }
 ```
 
-Full set: `motion`, `personDetected`, `strangerDetected`, `doorbellPress`, `petDetection`,
+Full set: `propertyChanged`, `motion`, `personDetected`, `strangerDetected`, `doorbellPress`, `petDetection`,
 `packageDelivered`, `packageTaken`, `packageStranded`, `soundDetected`, `cryingDetected`,
 `vehicleDetected`, `dogDetected`, `armingModeChanged`, `alarm`, `lockState`, `contactState`,
 `batteryLevel`, `batteryAlert`, `ptzNotify`, `smartLightState`.
