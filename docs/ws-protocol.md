@@ -192,6 +192,10 @@ Map an entry to an entity: `writable` + `bool` → **switch**, `enum` → **sele
 `number` → **number** (`unit`/`kind` for display), everything else → **sensor**. Pair with the live value
 from `state` (same `name`).
 
+`reported` (eufy-sdk 0.5+) says whether the device has reported that property yet. `false` means it never
+has, so a read-only one would show no value; a host can keep it out of view (the integration creates it
+disabled). It flips to `true` on the poll that first carries the value. Absent on an older SDK.
+
 The response also includes `decodedProperties: { bound, details }`. Each detail retains the SDK's
 `capability`, `accessor` and `reads` descriptors without re-deriving types or enum labels. `bound: false`
 and empty `details` distinguish an unbound model from a bound surface with no reads. Cache this
