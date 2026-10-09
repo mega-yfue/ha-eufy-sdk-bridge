@@ -84,9 +84,9 @@ export function loadConfig(env = process.env) {
     // Cloud poll interval (ms). Unset → the SDK default (600000 = 10 min). Changeable live via the
     // config.set WS command. 0 disables polling.
     pollMs: env.EUFY_POLL_MS ? Number(env.EUFY_POLL_MS) : undefined,
-    // Auto-off a live stream after this many ms with no detection event. A battery camera bleeds power
+    // Auto-off a BATTERY camera's live stream after this many ms with no detection event. It bleeds power
     // while its P2P live session is up, and go2rtc holds /stream open as long as anything consumes it —
-    // so keep the feed only while detections are recent. Default 5 min; 0 disables.
+    // so keep the feed only while detections are recent. Mains cameras are exempt. Default 5 min; 0 disables.
     streamIdleMs: env.STREAM_IDLE_MS != null ? Number(env.STREAM_IDLE_MS) : 300_000,
     // Battery-saver: a BATTERY camera left with the device's native `rtspStream` publish ON encodes
     // continuously and drains, even when nobody consumes it. If a battery device has rtspStream=true and
