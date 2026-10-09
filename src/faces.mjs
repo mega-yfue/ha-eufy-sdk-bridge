@@ -1,17 +1,18 @@
 // Face-recognition name resolution. A `personDetected` push carries only a numeric `person_id`, not the
-// recognised person's name — the name lives in the on-HomeBase `person_basic_info` table (read over P2P
-// at startup by warmup.mjs into `ctx.state.faceNames`). Here: parse that table, and enrich a push with
-// the resolved name. `parseFaceRoster` / `firstJsonObject` are pure and unit-tested.
+// recognised person's name — the name lives in the on-HomeBase `person_basic_info` table, which the SDK
+// reads over P2P (`getStationFaces`, called at startup by warmup.mjs into `ctx.state.faceNames`). Here:
+// turn one of its rows into a roster entry, and enrich a push with the resolved name. `rosterEntry` /
+// `firstJsonObject` are pure and unit-tested.
 
-/** Parse `person_basic_info` rows out of a reassembled P2P DB reply (name precedes person_id). */
-export function parseFaceRoster(text) {
-  const rows = text.matchAll(/\{"age":\d+,[^{}]*?"name":"([^"]*)"[^{}]*?"person_id":(\d+),"relation":"([^"]*)"/g);
-  const out = new Map();
-  for (const m of rows) {
-    const id = Number(m[2]);
-    if (!out.has(id)) out.set(id, { name: m[1], familiar: !/^stranger\d+$/.test(m[1]) });
-  }
-  return out;
+/**
+ * One `person_basic_info` row as a roster entry: `[person_id, { name, familiar }]`, or `undefined` for a row
+ * without a usable id or name. `stranger<n>` is the station's own placeholder for an unnamed face.
+ */
+export function rosterEntry(row) {
+  const id = Number(row?.person_id);
+  const name = row?.name;
+  if (!Number.isFinite(id) || typeof name !== "string") return undefined;
+  return [id, { name, familiar: !/^stranger\d+$/.test(name) }];
 }
 
 /** The first complete brace-balanced JSON object in a string (the P2P DB reply has trailing padding). */

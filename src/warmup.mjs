@@ -5,7 +5,7 @@
 // refresh into one at-a-time queue. Kicked off the boot critical path (they don't gate `ready`).
 import fs from "node:fs";
 import path from "node:path";
-import { parseFaceRoster, firstJsonObject } from "./faces.mjs";
+import { rosterEntry, firstJsonObject } from "./faces.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -229,36 +229,26 @@ export function createWarmup(ctx) {
   }
 
   /**
-   * Build the face-recognition roster by reading `person_basic_info` off each connected HomeBase over P2P
-   * (CMD_DATABASE 1306 / inner cmd 10000, mChannel 255). Faces are account-wide, so every station's rows
-   * merge into one map. On any failure the map just stays smaller and `personDetected` falls back to Unknown.
+   * Build the face-recognition roster from each connected HomeBase's own `person_basic_info` table, read by
+   * the SDK (`getStationFaces`). Faces are account-wide, so every station's rows merge into one map. Runs
+   * under the DB lock: the SDK's read shares the session's `dbChunk` stream with the history reads here.
+   * A station that fails just contributes nothing, and `personDetected` falls back to Unknown for its ids.
    */
   async function warmFaceRoster() {
     return withDbLock(async () => {
-      try {
-        const devs = await eufy.getDevices();
-        const accountId = await accountIdOf(devs);
-        for (const [, session] of await awaitSessions()) {
-          for (let i = 0; i < 30 && !session.isConnected; i++) await sleep(500);
-          if (!session.isConnected) continue;
-
-          let chunk = "";
-          const onChunk = ({ text }) => (chunk += text);
-          session.on("dbChunk", onChunk);
-          session.requestFaces({ accountId });
-          setTimeout(() => session.isConnected && session.requestFaces({ accountId }), 1500);
-          await sleep(6000);
-          session.off?.("dbChunk", onChunk);
-
+      for (const [stationSn] of await awaitSessions()) {
+        try {
           let added = 0;
-          for (const [id, rec] of parseFaceRoster(chunk)) {
-            if (!faceNames.has(id)) added++;
-            faceNames.set(id, rec);
+          for (const row of await eufy.getStationFaces(stationSn)) {
+            const entry = rosterEntry(row);
+            if (!entry) continue;
+            if (!faceNames.has(entry[0])) added++;
+            faceNames.set(...entry);
           }
           if (added) console.log(`[bridge] face roster: +${added} person(s) (${faceNames.size} total)`);
+        } catch (e) {
+          console.error(`[bridge] face roster from ${stationSn} failed: ${e?.message ?? e}`);
         }
-      } catch (e) {
-        console.error(`[bridge] warm face roster failed: ${e?.message ?? e}`);
       }
     });
   }
@@ -375,8 +365,20 @@ export function createWarmup(ctx) {
    * the stale disk copy and never re-fetches. So we retry across a bounded window and persist+report the
    * moment a NEW image lands, letting the caller nudge HA. `not-observed`/`invalid-image` mean there is no
    * pushed thumbnail (a pure local-storage cam) — give up immediately and let the P2P path handle it.
+   *
+   * While the new thumbnail downloads, `snapshotStored()` keeps returning the PREVIOUS event's image rather
+   * than `pending`. With `waitForNew` (a detection just arrived), bytes equal to the image persisted before
+   * the call are that previous image, so we keep polling instead of taking them as the answer.
    */
-  async function refreshStoredSnapshotFor(sn) {
+  async function refreshStoredSnapshotFor(sn, { waitForNew = false } = {}) {
+    let before;
+    if (waitForNew) {
+      try {
+        before = fs.readFileSync(path.join(eventImageDir, `last-event-${sn}.jpg`));
+      } catch {
+        // nothing persisted yet: any image is new
+      }
+    }
     let cam;
     try {
       cam = (await eufy.getDevice(sn)).camera?.();
@@ -395,11 +397,13 @@ export function createWarmup(ctx) {
         await sleep(2500);
         continue;
       }
-      if (jpeg?.length && persistIfChanged(sn, jpeg)) {
+      // `before` also catches the new image when HA's own /event-image fetch persisted it between polls.
+      if (jpeg?.length && (persistIfChanged(sn, jpeg) || (before && !before.equals(jpeg)))) {
         ctx.eventLog?.(`stored snapshot: ${sn} → last-event image updated (${jpeg.length}B, push)`);
         return true;
       }
-      return false; // got bytes but unchanged — nothing new to nudge about
+      if (!waitForNew) return false; // got bytes but unchanged — nothing new to nudge about
+      await sleep(2500); // still the previous event's image: its successor is downloading
     }
     ctx.eventLog?.(`stored snapshot: ${sn} — no push thumbnail landed in time`);
     return false;
@@ -411,14 +415,17 @@ export function createWarmup(ctx) {
     if (changed) ctx.broadcast?.({ event: "eventImageUpdated", deviceSn: sn });
   };
 
-  // In-flight guard per device: a burst of pushes (auto-track fires many) collapses to the one retry
-  // loop already running for that device.
+  // In-flight guard per device for the local-cover retry: a burst of pushes (auto-track fires many)
+  // collapses to the one loop already running for that device.
   const pendingRefresh = new Set(); // sn
   function onDetectionRefresh(sn) {
-    if (!sn || pendingRefresh.has(sn)) return;
+    if (!sn) return;
+    // Pushed cloud thumbnail: followed on EVERY detection, outside the guard. Each detection carries its
+    // own thumbnail, and the local-cover loop below can run for minutes, so a guarded follow would leave
+    // every detection inside that window showing the one before it. Nudge if it lands.
+    void refreshStoredSnapshotFor(sn, { waitForNew: true }).then((changed) => nudge(sn, changed));
+    if (pendingRefresh.has(sn)) return;
     pendingRefresh.add(sn);
-    // Pushed cloud thumbnail (doorbell / cloud cams): its own internal retry window; nudge if it lands.
-    void refreshStoredSnapshotFor(sn).then((changed) => nudge(sn, changed));
     // On-HomeBase local cover (local-storage cams): RETRY across the escalating schedule until a fresh
     // image lands — the HomeBase writes the new crop a few seconds after the push, so a single early
     // query is exactly what leaves "Last event" one image behind. Stop at the first genuine change.

@@ -13,6 +13,7 @@ const positiveInt = (v) => {
 
 /** The SDK event names broadcast to every connected WS client. */
 export const FORWARDED_EVENTS = [
+  "propertyChanged",
   "motion",
   "personDetected",
   "strangerDetected",
@@ -115,6 +116,9 @@ export function loadConfig(env = process.env) {
     // keeps the SDK default. Mains cameras ignore it, and closing the last viewer still ends the session
     // at once. Positive whole ms; anything else → default.
     streamBatteryBudgetMs: positiveInt(env.STREAM_BATTERY_BUDGET_MS),
+    // How long after the push /clip waits before downloading a HomeBase 2 recording, so the station has
+    // finished writing it. Set it at least to the camera's clip length. Default 30s.
+    clipSettleMs: env.CLIP_SETTLE_MS != null ? Number(env.CLIP_SETTLE_MS) : 30_000,
     // Event pre-warm: the SDK can speculatively open a camera's P2P session on a high-intent event
     // (doorbell/person/pet/package) so a following live view starts instantly. OFF by default here — it
     // holds a battery camera's radio open for ~28s per event. Set BRIDGE_PREWARM=1 to enable the SDK's

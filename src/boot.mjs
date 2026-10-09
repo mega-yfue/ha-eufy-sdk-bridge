@@ -79,15 +79,14 @@ export function createBoot(ctx) {
     if (flags.ready || flags.booting) return;
     flags.booting = true;
     try {
-      eufy.on("deviceState", ctx.bumpActivity); // poll heartbeat — the watchdog's liveness signal
       if (DEBUG) {
         eufy.on("p2pConnect", (sn) => dbg(`p2pConnect station=${sn}`));
         eufy.on("p2pClose", (sn) => dbg(`p2pClose station=${sn}`));
         eufy.on("commandAck", (info) => dbg(`commandAck ${JSON.stringify(info)}`));
       }
+      eufy.on("push", (ev) => ctx.noteRecording?.(ev)); // the recording a detection named, for /clip
       for (const e of FORWARDED_EVENTS)
         eufy.on(e, (payload) => {
-          ctx.bumpActivity();
           const detection = DETECTION_EVENTS.has(e);
           if (detection) {
             ctx.noteDetection(payload?.deviceSn);
@@ -98,13 +97,15 @@ export function createBoot(ctx) {
           // Narrow event trace (on by default): a push/semantic event arrived — say what it is, which
           // device, whether it's a detection (which is what makes HA refresh "Last event"), and how many
           // frontend clients it reaches. 0 clients means HA is not connected, so nothing updates there.
-          const clients = ctx.state.clients.size;
-          ctx.eventLog(
-            `push in: ${e} sn=${payload?.deviceSn ?? "?"}` +
-              `${detection ? " [detection → HA refreshes Last event]" : ""}` +
-              ` → broadcast to ${clients} frontend client(s)` +
-              `${clients === 0 ? " (NONE CONNECTED — HA will not update)" : ""}`,
-          );
+          if (e !== "propertyChanged") {
+            const clients = ctx.state.clients.size;
+            ctx.eventLog(
+              `push in: ${e} sn=${payload?.deviceSn ?? "?"}` +
+                `${detection ? " [detection → HA refreshes Last event]" : ""}` +
+                ` → broadcast to ${clients} frontend client(s)` +
+                `${clients === 0 ? " (NONE CONNECTED — HA will not update)" : ""}`,
+            );
+          }
           ctx.broadcast({ event: e, ...ctx.enrichPersonName(e, payload) });
         });
       // Use the same capability-based view the WS/HA side uses: a camera is a device describeDevice gave
@@ -114,7 +115,6 @@ export function createBoot(ctx) {
       const cams = await writeGo2rtcConfig(cfg, summaries);
       startGo2rtc();
       flags.ready = true;
-      flags.lastActivity = Date.now(); // start the liveness clock at boot, before the first poll
       timers.watchdog ??= setInterval(() => void ctx.watchdogTick(), 2 * 60_000);
       if (cfg.streamIdleMs) timers.streamIdle ??= setInterval(() => ctx.streamIdleTick(), 30_000);
       if (cfg.rtspIdleOffMs) timers.rtspIdle ??= setInterval(() => void ctx.rtspIdleSweep(), 60_000);

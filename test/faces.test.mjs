@@ -1,20 +1,20 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseFaceRoster, firstJsonObject, createFaces } from "../src/faces.mjs";
+import { rosterEntry, firstJsonObject, createFaces } from "../src/faces.mjs";
 
-test("parseFaceRoster: names + familiarity, first id wins", () => {
-  const text =
-    '[{"age":30,"gender":1,"name":"Alice","person_id":5,"relation":"family"},' +
-    '{"age":0,"name":"stranger12","person_id":7,"relation":""},' +
-    '{"age":40,"name":"Alice2","person_id":5,"relation":"family"}]';
-  const roster = parseFaceRoster(text);
-  assert.deepEqual(roster.get(5), { name: "Alice", familiar: true });
-  assert.deepEqual(roster.get(7), { name: "stranger12", familiar: false }); // stranger\d+ ⇒ not familiar
-  assert.equal(roster.size, 2); // duplicate id 5 kept the first row
+test("rosterEntry: a named person is familiar, a stranger<n> placeholder is not", () => {
+  assert.deepEqual(rosterEntry({ person_id: 5, name: "Alice", relation: "family" }), [
+    5,
+    { name: "Alice", familiar: true },
+  ]);
+  assert.deepEqual(rosterEntry({ person_id: 7, name: "stranger12" }), [7, { name: "stranger12", familiar: false }]);
+  assert.deepEqual(rosterEntry({ person_id: "9", name: "Bob" }), [9, { name: "Bob", familiar: true }]);
 });
 
-test("parseFaceRoster: no matches ⇒ empty map", () => {
-  assert.equal(parseFaceRoster("nothing here").size, 0);
+test("rosterEntry: a row without a usable id or name ⇒ undefined", () => {
+  assert.equal(rosterEntry({ name: "Alice" }), undefined);
+  assert.equal(rosterEntry({ person_id: 5 }), undefined);
+  assert.equal(rosterEntry(undefined), undefined);
 });
 
 test("firstJsonObject: skips leading junk + trailing padding", () => {

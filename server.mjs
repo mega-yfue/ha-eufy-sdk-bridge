@@ -3,6 +3,7 @@
 //   WS    :PORT/ws             control, state, events, AUTH   (the frontend talks to this)
 //   HTTP  :PORT/stream/<sn>    live video (Annex-B)           (go2rtc pulls this)
 //   HTTP  :PORT/snapshot/<sn>  a JPEG still
+//   HTTP  :PORT/clip/<sn>      the latest detection's recording, as an mp4 (HomeBase 2)
 //   HTTP  :PORT/healthz        liveness + auth state + which cameras are streaming
 //
 // This file is just the WIRING. Each concern lives in src/: config, the SDK client, the shared runtime
@@ -23,6 +24,7 @@ import { createWatchdog } from "./src/watchdog.mjs";
 import { createAuth } from "./src/auth.mjs";
 import { createBoot } from "./src/boot.mjs";
 import { createSolix } from "./src/solix.mjs";
+import { createClips } from "./src/clip.mjs";
 import { createHttpHandler } from "./src/http-routes.mjs";
 import { createWsServer } from "./src/ws-server.mjs";
 import { closeStreamClients } from "./streams.mjs";
@@ -59,6 +61,7 @@ Object.assign(
   createAuth(ctx),
   createBoot(ctx),
   createSolix(ctx),
+  createClips(ctx),
 );
 
 const httpServer = http.createServer(createHttpHandler(ctx));
@@ -69,12 +72,10 @@ eufy.on("error", (e) => {
   console.error(`[bridge] sdk error: ${e?.message ?? e}`);
   // A kicked/invalid cloud token surfaces as SessionExpiredError (the SDK has already cleared the
   // session) on the generic error bus. Match by name rather than `instanceof` so it still fires under a
-  // dual-package install where host and SDK hold different class objects. React immediately instead of
-  // waiting out the ~30-min poll-stall watchdog.
+  // dual-package install where host and SDK hold different class objects.
   if (e?.name === "SessionExpiredError") ctx.maybeRecoverSession();
 });
-// Push (FCM) liveness — the watchdog's poll heartbeat can't see a dead push channel (events ride push,
-// state rides poll), so track push connect/disconnect explicitly.
+// Push (FCM) liveness uses explicit transport connect/disconnect events.
 eufy.on("pushConnect", () => {
   state.flags.pushConnected = true;
   state.flags.pushSince = Date.now();
@@ -84,6 +85,19 @@ eufy.on("pushDisconnect", () => {
   state.flags.pushSince = Date.now();
 });
 
+// eufy answers a wrong country with the same `200/26108 Email address or password incorrect`
+// it uses for a genuinely wrong password, which sends people to debug the one thing that isn't
+// wrong (#60). The upstream code doesn't separate the two cases, so don't pretend to — just
+// name the other candidate, since it is the one nobody thinks of.
+const COUNTRY_HINT =
+  " (if the credentials are definitely right, check EUFY_COUNTRY: it must be the country the" +
+  " account was registered in)";
+
+function loginFailureHint(e) {
+  const msg = String(e?.message ?? e);
+  return /26108|password incorrect/i.test(msg) ? msg + COUNTRY_HINT : msg;
+}
+
 // ── boot ───────────────────────────────────────────────────────────────────────────────────────────
 async function main() {
   // Serve FIRST — the WS must be reachable so a client can drive 2FA/captcha before we're authed.
@@ -91,7 +105,7 @@ async function main() {
   try {
     await ctx.applyLogin(await eufy.login());
   } catch (e) {
-    console.error(`[bridge] login attempt failed: ${e?.message ?? e} — retry via WS 'auth.retrigger'`);
+    console.error(`[bridge] login attempt failed: ${loginFailureHint(e)} — retry via WS 'auth.retrigger'`);
   }
   if (state.flags.ready) console.log("[bridge] logged in from a stored session");
   else
