@@ -104,7 +104,10 @@ export function createStreamIdle(ctx) {
         console.log(`[bridge] stream(${sn}) idle ${Math.round((now - lastSeen) / 1000)}s (no detection) — auto-off`);
         idleSuspended.add(sn);
         lastPullAttempt.set(sn, now); // it was being pulled right now; start the "consumer gave up" clock fresh
-        st.feed.destroy(); // fires the feed's cleanup, which drops it from activeStreams/streaming
+        // Close every open request for this camera, not only the one activeStreams shows: when ffmpeg's
+        // reconnect overlapped two, the other would keep streaming into the suspension. Each destroy fires
+        // that feed's cleanup, which drops it from activeStreams/streaming.
+        for (const entry of [...(st.peers ?? [st])]) entry.feed.destroy();
       }
     }
     // Lift a suspension once the consumer stops asking: go2rtc only pulls /stream while HA has a viewer,

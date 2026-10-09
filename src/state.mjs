@@ -30,7 +30,7 @@ export function createState() {
 
     // ── live-stream idle auto-off bookkeeping ──
     lastDetect: new Map(), // sn -> ms of the most recent detection
-    activeStreams: new Map(), // sn -> { feed, startedAt } for feeds currently piping
+    activeStreams: new Map(), // sn -> { feed, startedAt, lease?, peers? } for feeds currently piping
     idleSuspended: new Set(), // sns torn down for idleness; reopen blocked until motion or consumer-gone
     lastPullAttempt: new Map(), // sn -> ms go2rtc last asked for /stream (even while suspended)
     rtspLastActive: new Map(), // sn -> ms of last detection/stream, for the battery rtspStream auto-off
