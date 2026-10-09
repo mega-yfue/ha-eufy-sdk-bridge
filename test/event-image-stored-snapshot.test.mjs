@@ -62,3 +62,24 @@ test("a detection inside the local-cover window still follows its own thumbnail"
 
   assert.equal(lookups(), 2);
 });
+
+test("a detection never writes an earlier event's thumbnail over a newer local cover", async (t) => {
+  // ha-eufy-sdk-bridge#97: on a local-storage account the retained push thumbnail can be older than the
+  // HomeBase cover the previous detection persisted.
+  const pushA = Buffer.from("push-A");
+  const coverB = Buffer.from("cover-B");
+  const seen = new Map([["SN1", { jpeg: pushA, at: Date.now() - 60_000 }]]); // A appeared a minute ago
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "event-image-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, "last-event-SN1.jpg"), coverB);
+  const warm = createWarmup({
+    eventImageDir: dir,
+    eventLog: () => {},
+    broadcast: () => {},
+    state: { faceNames: new Map(), storedThumbSeen: seen },
+    eufy: { getDevice: async () => ({ camera: () => ({ snapshotStored: async () => pushA }) }) },
+  });
+
+  assert.equal(await warm.refreshStoredSnapshotFor("SN1"), false);
+  assert.deepEqual(fs.readFileSync(path.join(dir, "last-event-SN1.jpg")), coverB);
+});

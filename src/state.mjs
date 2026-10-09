@@ -28,6 +28,9 @@ export function createState() {
     // person_id -> { name, familiar } — the HomeBase edge-AI face roster, built once at startup.
     faceNames: new Map(),
 
+    // sn -> { jpeg, at } — the retained push thumbnail and when it first appeared (stored-thumbnail.mjs).
+    storedThumbSeen: new Map(),
+
     // ── live-stream idle auto-off bookkeeping ──
     lastDetect: new Map(), // sn -> ms of the most recent detection
     activeStreams: new Map(), // sn -> { feed, startedAt, lease?, peers? } for feeds currently piping

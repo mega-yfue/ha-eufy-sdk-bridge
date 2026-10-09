@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { streamClientFor, dropStreamClient, isSupersededStreamClient } from "../streams.mjs";
 import { createLiveStillTap } from "./live-still.mjs";
+import { storedThumbnailSeenAt } from "./stored-thumbnail.mjs";
 
 function json(res, code, body) {
   const s = JSON.stringify(body);
@@ -39,6 +40,17 @@ export function createHttpHandler(ctx) {
   // A failed session is never reused, but it is not dropped under a request still streaming on it:
   // such a lease is dropped once its last feed ends (see cleanup).
   const dropWhenIdle = new WeakSet();
+
+  /** The persisted image when it was written after `since` and differs from `jpeg`, else undefined. */
+  async function diskCopyNewerThan(file, since, jpeg) {
+    try {
+      if ((await fs.promises.stat(file)).mtimeMs <= since) return undefined;
+      const disk = await fs.promises.readFile(file);
+      return disk.equals(jpeg) ? undefined : disk;
+    } catch {
+      return undefined; // nothing persisted yet
+    }
+  }
 
   // Ask go2rtc who is CONSUMING a stream (its remote address / user-agent / protocol) and log each — so
   // a stream that keeps opening "by itself" can be traced to the real viewer (an HA card, a recording,
@@ -227,6 +239,19 @@ export function createHttpHandler(ctx) {
           return json(res, 404, { error: "no camera on this device" });
         }
         const jpeg = await cam.snapshotStored();
+        // The retained thumbnail is the newest PUSHED one, not necessarily the newest picture: on a
+        // local-storage account the cloud attaches a thumbnail to only some events, and the on-detection
+        // HomeBase refresh writes each later event's cover to disk. So when the disk copy was written after
+        // this thumbnail first appeared, it is the newer picture: serve it and leave it in place.
+        const seenAt = storedThumbnailSeenAt(ctx.state.storedThumbSeen, sn, jpeg);
+        const newer = await diskCopyNewerThan(file, seenAt, jpeg);
+        if (newer) {
+          ctx.eventLog(
+            `/event-image ${sn} → 200 local cover (${newer.length}B, from disk; newer than the retained push thumbnail) — Last event served`,
+          );
+          res.writeHead(200, { "content-type": "image/jpeg", "content-length": newer.length });
+          return res.end(newer);
+        }
         fs.writeFile(file, jpeg, () => {}); // best-effort persist for restart survival
         ctx.eventLog(`/event-image ${sn} → 200 live thumbnail (${jpeg.length}B) — Last event updated`);
         res.writeHead(200, { "content-type": "image/jpeg", "content-length": jpeg.length });
