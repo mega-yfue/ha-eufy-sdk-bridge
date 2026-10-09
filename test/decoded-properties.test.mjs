@@ -232,3 +232,16 @@ test("WebSocket schema-1 replies add decoded fields without changing legacy fiel
     server.close();
   }
 });
+
+test("an events-only capability (no accessor, eufy-sdk 0.4.0+) is left out of the decoded readings", async () => {
+  const dev = camera();
+  const api = view(dev);
+  // The real SDK manifest for this camera carries `person_detection` with no accessor.
+  assert.ok(dev.describe().details.some((cap) => cap.accessor === undefined));
+  const summary = await api.describeDevice(sn);
+  assert.equal(Object.hasOwn(summary.decodedState, "undefined"), false);
+  assert.equal(summary.decodedState.camera.recordingQuality, 2);
+  const { details } = api.decodedProperties(dev);
+  assert.ok(details.length > 0);
+  assert.ok(details.every((cap) => typeof cap.accessor === "string" && cap.accessor.length > 0));
+});

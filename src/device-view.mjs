@@ -43,16 +43,25 @@ export function createDeviceView(ctx) {
     return out;
   }
 
+  /**
+   * The manifest's capabilities that have a read surface. A capability whose whole surface is inbound events
+   * (`person_detection`, since eufy-sdk 0.4.0) carries no `accessor` and no reads, so it has nothing to decode
+   * and is left out of both `decodedState` and `decodedProperties`.
+   */
+  function readSurfaces(manifest) {
+    return (manifest.details ?? []).filter((cap) => typeof cap.accessor === "string" && cap.accessor);
+  }
+
   /** Read only the getters named by the SDK manifest; never invoke an action or setter. */
   function decodedReadings(dev, manifest = dev.describe()) {
     const errors = [];
     const decodedState = Object.fromEntries(
-      (manifest.details ?? []).map((cap) => {
+      readSurfaces(manifest).map((cap) => {
         const surface = dev[cap.accessor]?.();
         return [
           cap.accessor,
           Object.fromEntries(
-            cap.reads.map((read) => {
+            (cap.reads ?? []).map((read) => {
               let value;
               try {
                 value = surface?.[read.accessor];
@@ -82,7 +91,7 @@ export function createDeviceView(ctx) {
   function decodedProperties(dev, manifest = dev.describe()) {
     return {
       bound: manifest.bound,
-      details: (manifest.details ?? []).map(({ capability, accessor, reads }) => ({
+      details: readSurfaces(manifest).map(({ capability, accessor, reads }) => ({
         capability,
         accessor,
         reads,
