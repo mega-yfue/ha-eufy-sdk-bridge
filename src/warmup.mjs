@@ -38,6 +38,11 @@ const LOCAL_REFRESH_MAX_MS = Number(process.env.EVENT_IMAGE_REFRESH_MAX_MS) || 2
 // query the button runs, made automatic. Throttled per device to keep HA's image polling from firing a
 // P2P query every time; env-tunable, 0 disables the auto-heal.
 const AUTOHEAL_COOLDOWN_MS = Number(process.env.EVENT_IMAGE_AUTOHEAL_COOLDOWN_MS ?? 60000);
+// The manual "Refresh Last Event" (event.refresh) answers within this long. The cover query over P2P and the
+// stored-thumbnail follow can run longer than the caller waits (Home Assistant gives the call 15s), so past
+// this point the reply says "not yet" and the refresh finishes in the background, nudging HA if an image
+// lands (ha-eufy-sdk#73).
+const FORCE_REFRESH_ANSWER_MS = Number(process.env.EVENT_IMAGE_FORCE_REFRESH_ANSWER_MS) || 10000;
 
 export function createWarmup(ctx) {
   const { eufy, eventImageDir } = ctx;
@@ -466,16 +471,29 @@ export function createWarmup(ctx) {
    * runs both sources once, right now, and nudges HA if a fresh image lands. Backs the manual "Refresh
    * Last Event" control, and answers whether the image actually changed so the caller can report it.
    */
-  async function forceRefreshEventImage(sn) {
+  async function forceRefreshEventImage(sn, { answerWithinMs = FORCE_REFRESH_ANSWER_MS } = {}) {
     if (!sn) return false;
-    const [stored, local] = await Promise.all([
+    const work = Promise.all([
       refreshStoredSnapshotFor(sn).catch(() => false),
       refreshLastEventImageFor(sn).catch(() => false),
-    ]);
-    const changed = Boolean(stored || local);
-    nudge(sn, changed);
-    ctx.eventLog?.(`force refresh: ${sn} → ${changed ? "image updated" : "no newer image available yet"}`);
-    return changed;
+    ]).then(([stored, local]) => {
+      const changed = Boolean(stored || local);
+      nudge(sn, changed); // reaches HA even when the caller already had its answer
+      ctx.eventLog?.(`force refresh: ${sn} → ${changed ? "image updated" : "no newer image available yet"}`);
+      return changed;
+    });
+    let timer;
+    const answer = new Promise((resolve) => {
+      timer = setTimeout(() => {
+        ctx.eventLog?.(`force refresh: ${sn} still running after ${answerWithinMs}ms — finishing in the background`);
+        resolve(false);
+      }, answerWithinMs);
+    });
+    try {
+      return await Promise.race([work, answer]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**
