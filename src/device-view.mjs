@@ -111,6 +111,9 @@ export function createDeviceView(ctx) {
       unit: p.unit, // "%", "°C", "dBm", …
       kind: p.kind, // percent | celsius | dbm | seconds | …
       writable: p.writable, // a setter exists (device.set accepts it)
+      // whether the device has reported it (eufy-sdk 0.5+); false lets a host keep a never-reported
+      // read-only value out of view. Undefined on an older SDK, which a host treats as "unknown".
+      reported: p.reported,
       enumValues: p.enumValues, // { raw: label } for enums
       description: p.description,
     }));
