@@ -54,6 +54,8 @@ async function setup() {
     if (t.clientGate) await t.clientGate;
     return {
       getDevice: async () => ({
+        // `t.describe` (if set) is the device's manifest; absent, the camera's power source is unknown.
+        ...(t.describe ? { describe: () => t.describe } : {}),
         camera: () => ({
           openReadable: async () => {
             t.opens++;
@@ -299,6 +301,42 @@ test("the idle sweep closes every open request for the camera, not only the one 
     await until(() => !t.state.streaming.has("CAM1"), "streaming cleared");
     assert.equal(t.state.activeStreams.has("CAM1"), false);
     assert.equal(inactive(t).length, 1, "'stopped' announced exactly once");
+  } finally {
+    await t.close();
+  }
+});
+
+test("the idle sweep leaves a mains camera streaming (an NVR keeps its feed)", async () => {
+  const t = await setup();
+  // T8423 floodlight: resolves the `battery` capability but is a mains-only model (ha-eufy-sdk-bridge#101).
+  t.describe = { sn: "CAM1", model: "T8423", capabilities: ["camera", "video", "battery"] };
+  try {
+    const a = pull(t);
+    await until(() => t.feeds.length === 1, "A opened");
+    const idle = createStreamIdle({ cfg: { streamIdleMs: 1 }, state: t.state, SUSPEND_RELEASE_MS: 60_000 });
+    await new Promise((r) => setTimeout(r, 5)); // older than the idle window
+    idle.streamIdleTick();
+    assert.equal(t.feeds[0].destroyed, false, "the mains feed keeps streaming");
+    assert.equal(t.state.idleSuspended.has("CAM1"), false, "and is never suspended");
+    assert.equal(t.state.activeStreams.has("CAM1"), true);
+    a.req.destroy();
+  } finally {
+    await t.close();
+  }
+});
+
+test("the idle sweep still auto-offs a battery camera", async () => {
+  const t = await setup();
+  t.describe = { sn: "CAM1", model: "T8170", capabilities: ["camera", "video", "battery"] };
+  try {
+    const a = pull(t);
+    await until(() => t.feeds.length === 1, "A opened");
+    const idle = createStreamIdle({ cfg: { streamIdleMs: 1 }, state: t.state, SUSPEND_RELEASE_MS: 60_000 });
+    await new Promise((r) => setTimeout(r, 5));
+    idle.streamIdleTick();
+    await settled(a);
+    assert.equal(t.feeds[0].destroyed, true);
+    assert.equal(t.state.idleSuspended.has("CAM1"), true);
   } finally {
     await t.close();
   }
