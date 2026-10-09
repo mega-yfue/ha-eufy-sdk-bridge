@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { rosterEntry, firstJsonObject } from "./faces.mjs";
+import { storedThumbnailSeenAt } from "./stored-thumbnail.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -41,6 +42,7 @@ const AUTOHEAL_COOLDOWN_MS = Number(process.env.EVENT_IMAGE_AUTOHEAL_COOLDOWN_MS
 export function createWarmup(ctx) {
   const { eufy, eventImageDir } = ctx;
   const { faceNames } = ctx.state;
+  const storedThumbSeen = ctx.state.storedThumbSeen ?? new Map();
 
   // ── shared serialisation for every P2P DB read (they share one dbChunk/image stream per session) ──
   let dbChain = Promise.resolve();
@@ -371,13 +373,17 @@ export function createWarmup(ctx) {
    * the call are that previous image, so we keep polling instead of taking them as the answer.
    */
   async function refreshStoredSnapshotFor(sn, { waitForNew = false } = {}) {
+    // A retained thumbnail belongs to this detection only if it first appeared after the detection began
+    // and is not the image already persisted then. One seen earlier is a previous event's, and on a
+    // local-storage account the disk may hold a newer HomeBase cover, so it must not be persisted over it
+    // (ha-eufy-sdk-bridge#97). The first-seen record is shared with /event-image, so an image HA's own
+    // fetch saw (and persisted) between polls still counts as new.
+    const since = Date.now();
     let before;
-    if (waitForNew) {
-      try {
-        before = fs.readFileSync(path.join(eventImageDir, `last-event-${sn}.jpg`));
-      } catch {
-        // nothing persisted yet: any image is new
-      }
+    try {
+      before = fs.readFileSync(path.join(eventImageDir, `last-event-${sn}.jpg`));
+    } catch {
+      // nothing persisted yet
     }
     let cam;
     try {
@@ -397,12 +403,13 @@ export function createWarmup(ctx) {
         await sleep(2500);
         continue;
       }
-      // `before` also catches the new image when HA's own /event-image fetch persisted it between polls.
-      if (jpeg?.length && (persistIfChanged(sn, jpeg) || (before && !before.equals(jpeg)))) {
+      const seenAt = jpeg?.length ? storedThumbnailSeenAt(storedThumbSeen, sn, jpeg) : -1;
+      if (seenAt >= since && !before?.equals(jpeg)) {
+        persistIfChanged(sn, jpeg);
         ctx.eventLog?.(`stored snapshot: ${sn} → last-event image updated (${jpeg.length}B, push)`);
         return true;
       }
-      if (!waitForNew) return false; // got bytes but unchanged — nothing new to nudge about
+      if (!waitForNew) return false; // only an earlier event's thumbnail — nothing new to nudge about
       await sleep(2500); // still the previous event's image: its successor is downloading
     }
     ctx.eventLog?.(`stored snapshot: ${sn} — no push thumbnail landed in time`);
