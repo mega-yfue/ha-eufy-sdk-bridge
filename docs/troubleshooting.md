@@ -45,12 +45,21 @@ log:
 - an arming or settings change logs `OK`, but the value in Home Assistant never changes;
 - live view logs `warm-timeout at awaiting-first-frame` although the camera answered.
 
-The camera never sets up the encryption key the bridge needs for protected commands, so it
-acknowledges the command and then ignores it. This is being investigated in
-[eufy-sdk#325](https://github.com/mega-yfue/eufy-sdk/issues/325). The accounts affected so far
-all have **Local Advanced Encryption** turned on (eufy app → Settings → Security → Media Content
-Encryption), so that setting is the main suspect, but this isn't confirmed yet. If you see this,
-please add your camera model and whether that setting is on to the issue.
+The camera acknowledges the command but doesn't act on it. Two known causes:
+
+- **Arming changes:** some standalone cameras reject the arming command in the form the SDK
+  currently sends and expect the eufy app's form instead. A fix for the T8410C is in
+  [eufy-sdk#448](https://github.com/mega-yfue/eufy-sdk/pull/448), and other models may need the
+  same change.
+- **Live view:** some standalone cameras expect a different live-start command from the one the
+  SDK sends, so they never stream. For the T8200 doorbell the app's command has been captured and a
+  fix is being prepared ([eufy-sdk#325](https://github.com/mega-yfue/eufy-sdk/issues/325),
+  [eufy-sdk#446](https://github.com/mega-yfue/eufy-sdk/issues/446)). Other models are still
+  under investigation in #325.
+
+Turning off **Local Advanced Encryption** in the eufy app does not help: affected cameras fail the
+same way with it off. If you see this, please add your camera model and a `debug_p2p` log to the
+issue.
 
 ## The bridge or the eufy app keeps getting logged out
 
