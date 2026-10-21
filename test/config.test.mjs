@@ -15,6 +15,8 @@ test("BRIDGE_PREWARM=1 turns pre-warm on (SDK default events)", () => {
   assert.equal(loadConfig({ ...base, BRIDGE_PREWARM: "1" }).cfg.prewarm, true);
   assert.equal(loadConfig({ ...base, BRIDGE_PREWARM: "true" }).cfg.prewarm, true);
   assert.equal(loadConfig({ ...base, BRIDGE_PREWARM: "0" }).cfg.prewarm, false);
+  assert.equal(loadConfig(base).cfg.personFromRecord, false); // default off
+  assert.equal(loadConfig({ ...base, EUFY_PERSON_FROM_RECORD: "1" }).cfg.personFromRecord, true);
 });
 
 test("FCM push store path is derived beside the session file", () => {

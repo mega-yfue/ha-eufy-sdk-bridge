@@ -267,11 +267,15 @@ export function createWarmup(ctx) {
       if (!dsn) continue;
       const ts = recordTime(rec);
       const p = cropPathOf(rec);
-      const s = seen.get(dsn) ?? { count: 0, maxTs: -1, maxTsHasCrop: false };
+      const s = seen.get(dsn) ?? { count: 0, maxTs: -1, maxTsHasCrop: false, maxTsTrigger: undefined };
       s.count += 1;
       if (ts > s.maxTs) {
         s.maxTs = ts;
         s.maxTsHasCrop = Boolean(p);
+        // trigger_type on the newest record classifies it on HB3 (2=motion, 4=person). Kept even for a
+        // crop-less record (a person recording the station mode didn't push still carries it).
+        const tt = Number(rec?.trigger_type ?? rec?.payload?.trigger_type);
+        s.maxTsTrigger = Number.isFinite(tt) ? tt : undefined;
       }
       seen.set(dsn, s);
       if (!p) continue;
@@ -337,6 +341,35 @@ export function createWarmup(ctx) {
     if (prev && prev.equals(data)) return false;
     fs.writeFileSync(file, data);
     return true;
+  }
+
+  /**
+   * The `trigger_type` of a device's freshest `history_record_info` record, across its connected
+   * station(s), or `undefined` if nothing readable. Used by the night-vision person upgrade (#35): on
+   * HomeBase 3, `2` = motion recording, `4` = person recording. Reuses the cover-refresh DB read and is
+   * serialised against it.
+   */
+  function latestTriggerType(sn) {
+    return withDbLock(async () => {
+      if (!sn) return undefined;
+      try {
+        const sessions = stationSessions();
+        if (!sessions.size) return undefined;
+        const devs = await eufy.getDevices();
+        const accountId = await accountIdOf(devs);
+        let best = { ts: -1, trigger: undefined };
+        for (const [, session] of sessions) {
+          if (!session.isConnected) continue;
+          const { seen } = await queryStationCovers(session, accountId);
+          const s = seen?.get(sn);
+          if (s && s.maxTs > best.ts) best = { ts: s.maxTs, trigger: s.maxTsTrigger };
+        }
+        return best.trigger;
+      } catch (e) {
+        console.error(`[bridge] latestTriggerType for ${sn} failed: ${e?.message ?? e}`);
+        return undefined;
+      }
+    });
   }
 
   /**
@@ -646,5 +679,6 @@ export function createWarmup(ctx) {
     onDetectionRefresh: localEventRefresh ? onDetectionRefresh : noop,
     forceRefreshEventImage,
     autoHealEventImage: localEventRefresh ? autoHealEventImage : noop,
+    latestTriggerType,
   };
 }
