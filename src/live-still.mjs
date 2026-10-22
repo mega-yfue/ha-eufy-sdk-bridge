@@ -90,6 +90,7 @@ export function createLiveStillTap({
   dir,
   toJpeg = accessUnitToJpeg,
   log = () => {},
+  onSaved = () => {},
   firstAfterMs = 5_000,
   everyMs = 30_000,
   now = Date.now,
@@ -109,6 +110,12 @@ export function createLiveStillTap({
         await fs.promises.writeFile(path.join(dir, `last-live-${sn}.jpg`), jpeg);
         savedSeq = Math.max(savedSeq, frame.seq);
         log(`/stream ${sn} → kept the live picture as the still (${jpeg.length}B, ${frame.codec})`);
+        // "Last screen" consumers (HA image entity) refresh on this instead of polling.
+        try {
+          onSaved();
+        } catch {
+          /* a listener failure must not affect the stream */
+        }
         return true;
       } catch (e) {
         log(`/stream ${sn} → could not keep the live picture: ${e?.message ?? e}`);

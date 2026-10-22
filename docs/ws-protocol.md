@@ -507,6 +507,7 @@ and implements them; registration alone does not establish hardware support for 
 | `GET /snapshot/<sn>` | a JPEG still (`image/jpeg`). _Requires auth._                                                               |
 | `GET /stream/<sn>`   | live Annex-B H.264/H.265 (`application/octet-stream`) — what go2rtc pulls. _Requires auth._                 |
 | `GET /clip/<sn>`     | the latest detection's HomeBase 2 recording (`video/mp4`). _Requires auth._                                 |
+| `GET /last-screen/<sn>` | the last picture someone watched live (`image/jpeg`, header `x-saved-at`); 404 until watched once. _Requires auth._ |
 
 The bridge does not infer cloud-poll health from device-event silence; `ok` means the HTTP endpoint answered.
 
@@ -515,7 +516,16 @@ the automatic battery-capability policy, `?mode=stored` to avoid live acquisitio
 persisted imagery, or `?mode=live` to attempt live acquisition first while retaining stored/persisted
 fallback behavior. The mode applies only to that request and does not modify `SNAPSHOT_LIVE` or other
 bridge configuration. `mode=live` is an acquisition preference, not a guarantee that the returned
-JPEG came from the live attempt. Invalid, empty, or duplicate `mode` parameters return HTTP 400.
+JPEG came from the live attempt. `?mode=screen` answers with the **last screen** — the last picture
+someone watched live (`GET /last-screen/<sn>`) — even when a later event thumbnail exists, never waking
+the camera; a camera never watched falls back to the newest picture on disk, and 404 when there is none.
+Invalid, empty, or duplicate `mode` parameters return HTTP 400.
+
+**Last screen vs last event.** Two pictures are kept per camera: the last event thumbnail
+(`GET /event-image/<sn>`, refreshed on detections, broadcast as `eventImageUpdated`) and the last screen
+(`GET /last-screen/<sn>`, saved while a `/stream` runs — ~5 s in, every 30 s, and when it ends — broadcast as
+`{ "event": "lastScreenUpdated", "deviceSn": "…" }` after each save). Without a mode `/snapshot` serves
+whichever of the two is newer.
 
 `GET /clip/<sn>` downloads the recording the camera's latest push named, over the station's P2P session
 (the camera is not woken), and muxes it with ffmpeg. It waits until `CLIP_SETTLE_MS` has passed since
