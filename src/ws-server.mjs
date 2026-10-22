@@ -7,6 +7,7 @@ import { listLightEffects } from "@mega-yfue/eufy-sdk";
 import { SOLIX_CONTROLS, SOLIX_DISABLED } from "./solix.mjs";
 import { redactSecrets } from "./redact.mjs";
 import { cameraViews, cameraView, validView } from "./camera-views.mjs";
+import { takeScreenshot } from "./screenshot.mjs";
 
 // Commands that require an authenticated eufy session — gated in one place before dispatch. (auth.* and
 // solix.* run before this gate, so a client can drive 2FA/captcha and Solix while eufy is still pending.)
@@ -216,6 +217,11 @@ export function createWsServer(ctx, httpServer) {
           // HA. Answers { changed } — true when a genuinely newer image landed.
           const changed = ctx.forceRefreshEventImage ? await ctx.forceRefreshEventImage(msg.sn) : false;
           return reply({ changed });
+        }
+        case "screen.take": {
+          // "Take screenshot" button: a fresh still from the camera (wakes a battery camera), kept as its
+          // last screen and announced with lastScreenUpdated. Answers { bytes }.
+          return reply(await takeScreenshot(ctx, msg.sn));
         }
         case "light.effects": {
           // The smart-light effect gallery (id + display name) for HA's effect_list. Cached; pass

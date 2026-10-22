@@ -298,6 +298,19 @@ the crop. _(Requires auth.)_
 // ←  { "id": 8, "ok": true, "changed": true }   // changed=false when no newer image is available yet
 ```
 
+### `screen.take`
+
+Take a **fresh still from the camera now** and keep it as its **last screen** (`GET /last-screen/<sn>`,
+`/snapshot?mode=screen`), then broadcast `lastScreenUpdated`. Backs a manual "Take Screenshot" control.
+A battery camera is woken for it (10-20 s), so give the call a long timeout. The bridge never calls this
+on a timer; besides this command, only watching the camera live updates the last screen. On failure
+(no picture, not a camera) the previous last screen is kept and nothing is broadcast. _(Requires auth.)_
+
+```jsonc
+// →  { "id": 9, "cmd": "screen.take", "sn": "EXAMPLE-CAM-0001" }
+// ←  { "id": 9, "ok": true, "bytes": 48213 }
+```
+
 ### `config.get` / `config.set`
 
 Read or change the **cloud poll interval** (`pollMs`, milliseconds) at runtime — how often the bridge
@@ -501,12 +514,12 @@ and implements them; registration alone does not establish hardware support for 
 
 ### Endpoint reference
 
-| method + path        | returns                                                                                                     |
-| -------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `GET /healthz`       | `{ ok, schemaVersion, bridgeId, auth: { state }, streaming: [sn,…] }` — always available (even before auth) |
-| `GET /snapshot/<sn>` | a JPEG still (`image/jpeg`). _Requires auth._                                                               |
-| `GET /stream/<sn>`   | live Annex-B H.264/H.265 (`application/octet-stream`) — what go2rtc pulls. _Requires auth._                 |
-| `GET /clip/<sn>`     | the latest detection's HomeBase 2 recording (`video/mp4`). _Requires auth._                                 |
+| method + path           | returns                                                                                                             |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `GET /healthz`          | `{ ok, schemaVersion, bridgeId, auth: { state }, streaming: [sn,…] }` — always available (even before auth)         |
+| `GET /snapshot/<sn>`    | a JPEG still (`image/jpeg`). _Requires auth._                                                                       |
+| `GET /stream/<sn>`      | live Annex-B H.264/H.265 (`application/octet-stream`) — what go2rtc pulls. _Requires auth._                         |
+| `GET /clip/<sn>`        | the latest detection's HomeBase 2 recording (`video/mp4`). _Requires auth._                                         |
 | `GET /last-screen/<sn>` | the last picture someone watched live (`image/jpeg`, header `x-saved-at`); 404 until watched once. _Requires auth._ |
 
 The bridge does not infer cloud-poll health from device-event silence; `ok` means the HTTP endpoint answered.
