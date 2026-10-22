@@ -455,7 +455,7 @@ Fired when a camera's live P2P feed opens (`active: true`) or is torn down / idl
 | -------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `GET /healthz`       | `{ ok, schemaVersion, bridgeId, auth: { state }, streaming: [sn,…] }` — always available (even before auth) |
 | `GET /snapshot/<sn>` | a JPEG still (`image/jpeg`). _Requires auth._                                                               |
-| `GET /stream/<sn>`   | live Annex-B H.264/H.265 (`video/H264`) — what go2rtc pulls. _Requires auth._                               |
+| `GET /stream/<sn>`   | live Annex-B H.264/H.265 (`application/octet-stream`) — what go2rtc pulls. _Requires auth._                 |
 | `GET /clip/<sn>`     | the latest detection's HomeBase 2 recording (`video/mp4`). _Requires auth._                                 |
 
 The bridge does not infer cloud-poll health from device-event silence; `ok` means the HTTP endpoint answered.
