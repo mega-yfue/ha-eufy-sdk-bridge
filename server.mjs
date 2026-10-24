@@ -2,6 +2,7 @@
 //
 //   WS    :PORT/ws             control, state, events, AUTH   (the frontend talks to this)
 //   HTTP  :PORT/stream/<sn>    live video (Annex-B)           (go2rtc pulls this)
+//   HTTP  :PORT/audio/<sn>     live audio (ADTS AAC)          (go2rtc pulls this too)
 //   HTTP  :PORT/snapshot/<sn>  a JPEG still
 //   HTTP  :PORT/clip/<sn>      the latest detection's recording, as an mp4 (HomeBase 2)
 //   HTTP  :PORT/healthz        liveness + auth state + which cameras are streaming

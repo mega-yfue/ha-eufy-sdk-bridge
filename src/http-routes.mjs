@@ -1,11 +1,12 @@
-// HTTP surface: live video (go2rtc pulls /stream/<sn>), a snapshot still, the persisted last-event
-// thumbnail, the latest detection's stored clip, and /healthz. Video is deliberately OFF the WS — connecting to /stream is what opens the
-// camera, disconnecting is what stops it, so there's no "is it streaming" flag to drift. Returns the
-// request handler; server.mjs wraps it in http.createServer.
+// HTTP surface: live video (go2rtc pulls /stream/<sn>) and its audio (/audio/<sn>), a snapshot still, the
+// persisted last-event thumbnail, the latest detection's stored clip, and /healthz. Video is deliberately
+// OFF the WS — connecting to /stream is what opens the camera, disconnecting is what stops it, so there's
+// no "is it streaming" flag to drift. Returns the request handler; server.mjs wraps it in http.createServer.
 import fs from "node:fs";
 import path from "node:path";
 import { streamClientFor, dropStreamClient, isSupersededStreamClient } from "../streams.mjs";
 import { createLiveStillTap } from "./live-still.mjs";
+import { openAdts, isNoLiveAudio, ADTS_CONTENT_TYPE } from "./live-audio.mjs";
 import { onBatteryPower } from "./power.mjs";
 import { storedThumbnailSeenAt } from "./stored-thumbnail.mjs";
 import { redactSecrets } from "./redact.mjs";
@@ -85,10 +86,10 @@ export function createHttpHandler(ctx) {
   // Log every /stream request's IMMEDIATE requester (IP + UA). Normally that's go2rtc's own ffmpeg on
   // localhost; anything else means something is pulling the bridge feed directly — itself a finding.
   // Then (throttled) ask go2rtc who the real consumer is.
-  function noteStreamRequest(sn, req) {
+  function noteStreamRequest(sn, req, kind = "stream") {
     const ip = req.socket?.remoteAddress ?? "?";
     const ua = req.headers["user-agent"] ?? "";
-    ctx.eventLog?.(`/stream ${sn} requested by ${ip}${ua ? ` (UA: ${ua})` : ""}`);
+    ctx.eventLog?.(`/${kind} ${sn} requested by ${ip}${ua ? ` (UA: ${ua})` : ""}`);
     if (!STREAM_CONSUMER_LOG_MS) return;
     const now = Date.now();
     if (now - (lastConsumerLog.get(sn) ?? 0) < STREAM_CONSUMER_LOG_MS) return;
@@ -298,8 +299,10 @@ export function createHttpHandler(ctx) {
       return res.end(clip.mp4);
     }
 
-    if (kind === "stream" && sn) {
-      noteStreamRequest(sn, req); // trace who is pulling this stream (incl. go2rtc's real consumers)
+    // /audio is a feed like /stream (same client, idle-off, backoff and cleanup), over live() instead of
+    // openReadable(): see live-audio.mjs.
+    if ((kind === "stream" || kind === "audio") && sn) {
+      noteStreamRequest(sn, req, kind); // trace who is pulling this stream (incl. go2rtc's real consumers)
       if (cfg.streamIdleMs) lastPullAttempt.set(sn, Date.now()); // consumer is asking (watched vs. gone)
       // Idle-suspended: no detection recently, so don't reopen the P2P session. go2rtc's ffmpeg source
       // retries into this until a detection or the consumer giving up lifts it (see streamIdleTick).
@@ -326,15 +329,19 @@ export function createHttpHandler(ctx) {
         const client = await lease;
         const dev = await client.getDevice(sn);
         const cam = dev.camera?.();
-        if (!cam?.openReadable) {
+        if (kind === "audio" ? !cam?.live : !cam?.openReadable) {
           res.off("close", onGone);
-          return json(res, 404, { error: "no live video on this device" });
+          return json(res, 404, { error: `no live ${kind === "audio" ? "audio" : "video"} on this device` });
         }
         if (gone) return; // don't wake the camera for a viewer that already left
         // The battery budget only takes effect when this call opens the session, which it does: the stream
         // client is dedicated to /stream (stills go through the control client), so nothing opens it first.
         const budget = cfg.streamBatteryBudgetMs;
-        const feed = await cam.openReadable(budget ? { batteryBudgetMs: budget } : undefined); // Annex-B
+        const opts = budget ? { batteryBudgetMs: budget } : undefined;
+        const feed =
+          kind === "audio"
+            ? await openAdts(await cam.live(opts)) // ADTS AAC, once the first frame has arrived
+            : await cam.openReadable(opts); // Annex-B
         res.off("close", onGone);
         ctx.noteStreamOpened?.(sn); // reachable again → clear any failure backoff
         if (gone) {
@@ -354,17 +361,23 @@ export function createHttpHandler(ctx) {
         streaming.add(sn);
         activeStreams.set(sn, entry);
         rtspLastActive.set(sn, Date.now()); // a live stream counts as activity for the rtspStream auto-off
-        res.writeHead(200, { "content-type": "video/H264", "cache-control": "no-cache" });
+        res.writeHead(200, {
+          "content-type": kind === "audio" ? ADTS_CONTENT_TYPE : "video/H264",
+          "cache-control": "no-cache",
+        });
         feed.pipe(res);
         // Remember the stream's latest keyframe so the still can show what was last SEEN, not only the
         // last event — without ever waking the camera for it (see live-still.mjs).
-        const still = createLiveStillTap({ sn, dir: eventImageDir, log: ctx.eventLog ?? (() => {}) });
-        feed.on("data", still.onChunk);
+        const still =
+          kind === "stream"
+            ? createLiveStillTap({ sn, dir: eventImageDir, log: ctx.eventLog ?? (() => {}) })
+            : undefined;
+        if (still) feed.on("data", still.onChunk);
         let cleanedUp = false;
         const cleanup = () => {
           if (cleanedUp) return;
           cleanedUp = true;
-          void still.flush();
+          void still?.flush();
           feed.destroy();
           // pipe() ends the response only on a clean end. A feed that failed (P2P drop, warm-up timeout) or
           // closed early would leave ffmpeg on an open, silent socket until its own timeout — abort the
@@ -390,6 +403,12 @@ export function createHttpHandler(ctx) {
         return;
       } catch (e) {
         res.off("close", onGone);
+        // The camera serves no audio we can relay (another codec, or a microphone that is off). Its video is
+        // unaffected, so neither arm the backoff nor drop the client: a 404 just tells go2rtc to go on without.
+        if (isNoLiveAudio(e)) {
+          ctx.eventLog?.(`/audio ${sn} → 404 ${e.message}`);
+          return json(res, 404, { error: e.message });
+        }
         // Our client was dropped (or the bridge is shutting down) before its login finished: nothing was
         // opened and the camera did not fail, so neither arm the backoff nor drop the client that replaced it.
         if (isSupersededStreamClient(e)) return json(res, 503, { error: String(e?.message ?? e) });

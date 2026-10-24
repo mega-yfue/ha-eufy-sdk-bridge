@@ -456,6 +456,7 @@ Fired when a camera's live P2P feed opens (`active: true`) or is torn down / idl
 | `GET /healthz`       | `{ ok, schemaVersion, bridgeId, auth: { state }, streaming: [sn,…] }` — always available (even before auth) |
 | `GET /snapshot/<sn>` | a JPEG still (`image/jpeg`). _Requires auth._                                                               |
 | `GET /stream/<sn>`   | live Annex-B H.264/H.265 (`video/H264`) — what go2rtc pulls. _Requires auth._                               |
+| `GET /audio/<sn>`    | live audio as ADTS AAC-LC (`audio/aac`) — go2rtc pulls it next to `/stream`. _Requires auth._               |
 | `GET /clip/<sn>`     | the latest detection's HomeBase 2 recording (`video/mp4`). _Requires auth._                                 |
 
 The bridge does not infer cloud-poll health from device-event silence; `ok` means the HTTP endpoint answered.
@@ -473,8 +474,32 @@ that push, then keeps the clip until the next one. It answers 404 on a camera wi
 (anything but a HomeBase 2 camera), 409 when no push has named a recording since the bridge started, and
 502 with the SDK's `reason` when the download fails.
 
-go2rtc (bundled) turns `/stream/<sn>` into RTSP / WebRTC / MSE / HLS, so the frontend never speaks the
+`GET /audio/<sn>` relays the camera's live audio over the same P2P session as `/stream` (the SDK's
+`live()`, which joins the shared pull). The camera declares its codec per frame, and only `aac-lc` is
+served, since its frames arrive ADTS-framed. Before answering, the route waits for the first frame and
+answers 404 when the camera declares another codec (`aac-eld`, `g711a`), when video flows for 3 s with no
+audio (a microphone that is off sends none), or when nothing arrives within 20 s. A 404 here neither arms
+the stream-failure backoff nor drops the camera's client: the video is unaffected.
+
+The route never answers 200 without bytes for a reason. go2rtc dials a stream's sources one after another,
+and its ADTS reader blocks until it sees a header. So an `/audio` left open and silent would hold every
+viewer's DESCRIBE, video included, while a 404 lets go2rtc carry on with video alone.
+
+go2rtc (bundled) turns `/stream/<sn>` (and `/audio/<sn>`) into RTSP / WebRTC / MSE / HLS, so the frontend never speaks the
 raw video protocol.
+The generated `go2rtc.yaml` gives each camera three sources:
+
+```yaml
+<sn>:
+  - ffmpeg:http://<self>:3000/stream/<sn>#video=copy#async
+  - http://<self>:3000/audio/<sn>
+  - ffmpeg:<sn>#audio=opus
+```
+
+go2rtc reads the ADTS itself. `ffmpeg:…#audio=copy` does not work over RTSP ("AAC with no global
+headers is currently not supported"): raw ADTS carries no AudioSpecificConfig, and the failed source takes
+the whole audio track with it. The last line is go2rtc's loopback that transcodes the AAC to Opus for
+WebRTC, and it runs only when a consumer asks for Opus.
 
 ---
 
@@ -488,4 +513,4 @@ raw video protocol.
   (`CMD_INDOOR_PAN_CALIBRATION` 6017 / `CMD_OUTDOOR_PAN_CALIBRATION` 6251) is the notable one.
 - Guard / station security mode (arm home/away/disarm).
 - Per-device event subscription/filtering (events broadcast to all clients).
-- Audio / recording / timelapse.
+- Live audio in codecs other than `aac-lc` (`aac-eld`, `g711a`), recording, and timelapse.
