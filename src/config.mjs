@@ -10,6 +10,11 @@ const positiveInt = (v) => {
   const n = Number(v);
   return v != null && v !== "" && Number.isSafeInteger(n) && n > 0 ? n : undefined;
 };
+/** A comma- or space-separated env value as a list of its non-empty entries. */
+const list = (v) =>
+  String(v ?? "")
+    .split(/[\s,]+/)
+    .filter(Boolean);
 
 /** The SDK event names broadcast to every connected WS client. */
 export const FORWARDED_EVENTS = [
@@ -116,6 +121,17 @@ export function loadConfig(env = process.env) {
     // keeps the SDK default. Mains cameras ignore it, and closing the last viewer still ends the session
     // at once. Positive whole ms; anything else → default.
     streamBatteryBudgetMs: positiveInt(env.STREAM_BATTERY_BUDGET_MS),
+    // Cameras whose live feed go2rtc converts to H.264 instead of passing through, by serial. For an
+    // H.265 camera (a SoloCam S340; a camera with "High compression encoding" on) watched where H.265
+    // does not play: over WebRTC, desktop Chrome receives the stream and decodes no frame, and a Raspberry
+    // Pi's Chromium has no H.265 decoder at all. The feed itself is fine (it decodes cleanly in ffmpeg), so
+    // converting it is the whole fix. It costs a software encode for as long as someone watches. Empty:
+    // every camera is copied, as before.
+    transcodeH264: list(env.TRANSCODE_H264),
+    // The width a converted feed is scaled to, its height following. Encoding is the cost, and it grows with
+    // the picture: a 2880x1616 S340 converted at 1280 wide took about half a desktop core in real time.
+    // Positive whole pixels; anything else keeps the camera's own size.
+    transcodeWidth: positiveInt(env.TRANSCODE_WIDTH ?? 1280),
     // How long after the push /clip waits before downloading a HomeBase 2 recording, so the station has
     // finished writing it. Set it at least to the camera's clip length. Default 30s.
     clipSettleMs: env.CLIP_SETTLE_MS != null ? Number(env.CLIP_SETTLE_MS) : 30_000,

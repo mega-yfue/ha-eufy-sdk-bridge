@@ -11,6 +11,22 @@ test("event pre-warm is OFF by default", () => {
   assert.equal(loadConfig({ ...base, EUFY_LOCAL_EVENT_REFRESH: "off" }).cfg.localEventRefresh, false);
 });
 
+test("TRANSCODE_H264: empty by default, a comma- or space-separated list of serials otherwise", () => {
+  assert.deepEqual(loadConfig(base).cfg.transcodeH264, []);
+  assert.deepEqual(loadConfig({ ...base, TRANSCODE_H264: "T8170A, T8170B T8210C" }).cfg.transcodeH264, [
+    "T8170A",
+    "T8170B",
+    "T8210C",
+  ]);
+});
+
+test("TRANSCODE_WIDTH: 1280 by default, a custom width honoured, anything else keeps the camera's size", () => {
+  assert.equal(loadConfig(base).cfg.transcodeWidth, 1280);
+  assert.equal(loadConfig({ ...base, TRANSCODE_WIDTH: "1920" }).cfg.transcodeWidth, 1920);
+  assert.equal(loadConfig({ ...base, TRANSCODE_WIDTH: "0" }).cfg.transcodeWidth, undefined);
+  assert.equal(loadConfig({ ...base, TRANSCODE_WIDTH: "wide" }).cfg.transcodeWidth, undefined);
+});
+
 test("BRIDGE_PREWARM=1 turns pre-warm on (SDK default events)", () => {
   assert.equal(loadConfig({ ...base, BRIDGE_PREWARM: "1" }).cfg.prewarm, true);
   assert.equal(loadConfig({ ...base, BRIDGE_PREWARM: "true" }).cfg.prewarm, true);

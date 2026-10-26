@@ -3,7 +3,8 @@
 // go2rtc (bundled in the image) is the ONLY media-protocol code in this project: it pulls the bridge's
 // one HTTP Annex-B feed per camera and turns it into RTSP / WebRTC / MSE / HLS. Each camera becomes a
 // go2rtc stream sourced from `ffmpeg:<the bridge's /stream URL>#video=copy` — copy, not transcode, so
-// go2rtc only remuxes.
+// go2rtc only remuxes. The exception is a camera listed in TRANSCODE_H264, converted to H.264 for
+// consumers that cannot play the H.265 it sends.
 //
 // The file contains real serials, so it is gitignored and generated at startup.
 import { writeFile, mkdir } from "node:fs/promises";
@@ -13,6 +14,14 @@ import { dirname } from "node:path";
 // include camera/video). This matches what HA turns into a camera entity — using deviceClass here
 // would miss a camera the SDK downgrades to "other" for sitting behind a HomeBase (not direct P2P).
 const isCamera = (d) => Boolean(d.stream);
+
+// How a camera's video reaches go2rtc's consumers: copied, or converted to H.264 for the cameras listed in
+// TRANSCODE_H264 (config.mjs says why). The height is -2, not go2rtc's -1, because x264 needs even
+// dimensions and -1 can come out odd.
+function videoParams(cfg, sn) {
+  if (!cfg.transcodeH264?.includes(sn)) return "#video=copy";
+  return cfg.transcodeWidth ? `#video=h264#width=${cfg.transcodeWidth}#height=-2` : "#video=h264";
+}
 
 export async function writeGo2rtcConfig(cfg, devices) {
   const cams = devices.filter(isCamera);
@@ -32,8 +41,8 @@ export async function writeGo2rtcConfig(cfg, devices) {
     // instead of trusting the camera's. The eufy feed starts at dts 0 and then jumps, which a consumer
     // reads as a broken stream: Home Assistant aborts with "Timestamp discontinuity detected: last dts =
     // 0, dts = 4219155056" seconds after the picture starts flowing. Re-stamping costs nothing here —
-    // the feed is remuxed, not transcoded, and a live view has no timeline to preserve.
-    lines.push(`  ${d.sn}: ffmpeg:http://${cfg.selfHost}:${cfg.port}/stream/${d.sn}#video=copy#async`);
+    // the feed is remuxed (or, for a listed camera, transcoded), and a live view has no timeline to preserve.
+    lines.push(`  ${d.sn}: ffmpeg:http://${cfg.selfHost}:${cfg.port}/stream/${d.sn}${videoParams(cfg, d.sn)}#async`);
   }
   const yaml = lines.join("\n") + "\n";
   await mkdir(dirname(cfg.go2rtcConfig), { recursive: true }).catch(() => {});
