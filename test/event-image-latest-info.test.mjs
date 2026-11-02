@@ -158,6 +158,21 @@ test("a station silent on both forms stops being asked latest-info after three t
   assert.ok(log.includes("history query: no records parsed (raw 0B received; latest-info unanswered too)"));
 });
 
+test("a station that has answered latest-info is still asked after it falls silent", async () => {
+  let latest = latestFor("/media/mmcblk0p1/video/20261013100000_c01.jpg", 41);
+  const station = fakeStation({ latest: () => latest?.() });
+  const { warm, log } = setup(station);
+
+  assert.equal(await run(() => warm.refreshLastEventImageFor("CAM1")), true);
+  latest = undefined; // three misses in a row, and more
+  for (let i = 0; i < 5; i++) await run(() => warm.refreshLastEventImageFor("CAM1"));
+  assert.equal(station.asked.filter((a) => a === "10013@0").length, 6);
+
+  latest = latestFor("/media/mmcblk0p1/video/20261013110000_c01.jpg", 42);
+  assert.equal(await run(() => warm.refreshLastEventImageFor("CAM1")), true);
+  assert.ok(log.includes("latest-info: CAM1 event_count=42 crop=20261013110000_c01.jpg (advanced, taken)"));
+});
+
 test("a cover answered inside the eufysecurity: wrapper is unwrapped and persisted as a JPEG", async () => {
   const path = "/media/mmcblk0p1/video/20261013100000_c01.jpg";
   const station = fakeStation({ latest: latestFor(path, 41) });

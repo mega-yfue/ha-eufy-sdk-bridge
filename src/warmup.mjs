@@ -145,9 +145,12 @@ export function createWarmup(ctx) {
   // station whose direct read merely dropped once never swaps to the older form.
   const directReadAnswered = new Set();
   // Per device, the latest-info crop path last seen, and per station, how many latest-info queries in a
-  // row went unanswered (a standalone camera answers neither form; it stops being asked after a few).
+  // row went unanswered. A station that has never answered stops being asked after a few. One that has
+  // answered keeps being asked: a T8200 can miss three in a row and answer the next, and giving up on it
+  // would freeze "Last event" until a restart.
   const latestInfoPath = new Map();
   const latestInfoSilent = new Map();
+  const latestInfoAnswered = new Set();
   const LATEST_INFO_MAX_SILENT = 3;
 
   /**
@@ -176,10 +179,12 @@ export function createWarmup(ctx) {
 
     const entries = Array.isArray(obj?.data) ? obj.data : undefined;
     if (!entries) {
-      latestInfoSilent.set(stationSn, (latestInfoSilent.get(stationSn) ?? 0) + 1);
+      if (!latestInfoAnswered.has(stationSn))
+        latestInfoSilent.set(stationSn, (latestInfoSilent.get(stationSn) ?? 0) + 1);
       return undefined;
     }
     latestInfoSilent.delete(stationSn);
+    latestInfoAnswered.add(stationSn);
     const taken = [];
     for (const rec of entries) {
       const dsn = rec?.device_sn;
