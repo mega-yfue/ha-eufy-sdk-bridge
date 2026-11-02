@@ -7,11 +7,13 @@
 The host-facing daemon: one process that logs into eufy **once** and exposes the
 [`eufy-sdk`](https://github.com/mega-yfue/eufy-sdk) to a frontend — Home Assistant, a web UI,
 anything. Ships as a multi-arch Docker image with [go2rtc](https://github.com/AlexxIT/go2rtc)
-bundled, so live camera video is available as RTSP / WebRTC / MSE / HLS with nothing else to install.
+bundled, so live camera video (with the camera's sound, where it sends AAC-LC) is available as
+RTSP / WebRTC / MSE / HLS with nothing else to install.
 
 ```
 WS    :3000/ws             control, state, events     ← the frontend talks to this
 HTTP  :3000/stream/<sn>    live video (Annex-B)       ← go2rtc pulls this
+HTTP  :3000/audio/<sn>     live audio (ADTS AAC)      ← and this, next to the video
 HTTP  :3000/snapshot/<sn>  a JPEG still
 HTTP  :3000/clip/<sn>      the latest detection's recording, as an mp4 (HomeBase 2)
 HTTP  :3000/healthz        which cameras are streaming

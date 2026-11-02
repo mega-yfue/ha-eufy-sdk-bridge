@@ -1,9 +1,9 @@
 // Write go2rtc.yaml from the live device list, so a camera appears with nobody editing YAML.
 //
 // go2rtc (bundled in the image) is the ONLY media-protocol code in this project: it pulls the bridge's
-// one HTTP Annex-B feed per camera and turns it into RTSP / WebRTC / MSE / HLS. Each camera becomes a
-// go2rtc stream sourced from `ffmpeg:<the bridge's /stream URL>#video=copy` — copy, not transcode, so
-// go2rtc only remuxes.
+// one HTTP Annex-B feed per camera, plus its ADTS audio feed, and turns them into RTSP / WebRTC / MSE / HLS.
+// Each camera becomes a go2rtc stream whose video comes from `ffmpeg:<the bridge's /stream URL>#video=copy`
+// — copy, not transcode, so go2rtc only remuxes.
 //
 // The file contains real serials, so it is gitignored and generated at startup.
 import { writeFile, mkdir } from "node:fs/promises";
@@ -33,7 +33,19 @@ export async function writeGo2rtcConfig(cfg, devices) {
     // reads as a broken stream: Home Assistant aborts with "Timestamp discontinuity detected: last dts =
     // 0, dts = 4219155056" seconds after the picture starts flowing. Re-stamping costs nothing here —
     // the feed is remuxed, not transcoded, and a live view has no timeline to preserve.
-    lines.push(`  ${d.sn}: ffmpeg:http://${cfg.selfHost}:${cfg.port}/stream/${d.sn}#video=copy#async`);
+    //
+    // Audio is a second source: /stream carries video only (see live-audio.mjs). go2rtc reads /audio's ADTS
+    // itself, not through ffmpeg: `ffmpeg:…#audio=copy` fails on RTSP ("AAC with no global headers"), since
+    // raw ADTS has no AudioSpecificConfig, while go2rtc's own reader builds it from the ADTS header. The
+    // last source is go2rtc's loopback that transcodes that AAC to the Opus WebRTC needs, on demand.
+    // `asetpts=N/SR/TB` re-stamps the decoded audio from its sample count: on some cameras (a T8214)
+    // go2rtc's AAC timestamps advance ~0.23 s per 0.064 s packet, so the Opus ran ~5x faster than real
+    // time and played back choppy. Where the timestamps are already right it changes nothing.
+    const base = `http://${cfg.selfHost}:${cfg.port}`;
+    lines.push(`  ${d.sn}:`);
+    lines.push(`    - ffmpeg:${base}/stream/${d.sn}#video=copy#async`);
+    lines.push(`    - ${base}/audio/${d.sn}`);
+    lines.push(`    - ffmpeg:${d.sn}#audio=opus#raw=-af asetpts=N/SR/TB`);
   }
   const yaml = lines.join("\n") + "\n";
   await mkdir(dirname(cfg.go2rtcConfig), { recursive: true }).catch(() => {});
