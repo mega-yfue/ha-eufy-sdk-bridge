@@ -493,13 +493,16 @@ The generated `go2rtc.yaml` gives each camera three sources:
 <sn>:
   - ffmpeg:http://<self>:3000/stream/<sn>#video=copy#async
   - http://<self>:3000/audio/<sn>
-  - ffmpeg:<sn>#audio=opus
+  - ffmpeg:<sn>#audio=opus#raw=-af asetpts=N/SR/TB
 ```
 
 go2rtc reads the ADTS itself. `ffmpeg:…#audio=copy` does not work over RTSP ("AAC with no global
 headers is currently not supported"): raw ADTS carries no AudioSpecificConfig, and the failed source takes
 the whole audio track with it. The last line is go2rtc's loopback that transcodes the AAC to Opus for
-WebRTC, and it runs only when a consumer asks for Opus.
+WebRTC, and it runs only when a consumer asks for Opus. `asetpts=N/SR/TB` re-stamps that audio from its
+sample count: on a T8214 the AAC timestamps advanced ~0.23 s per 0.064 s packet, so the Opus ran about five
+times faster than real time and played choppy. On a camera whose timestamps are already regular it changes
+nothing.
 
 ---
 

@@ -38,11 +38,14 @@ export async function writeGo2rtcConfig(cfg, devices) {
     // itself, not through ffmpeg: `ffmpeg:…#audio=copy` fails on RTSP ("AAC with no global headers"), since
     // raw ADTS has no AudioSpecificConfig, while go2rtc's own reader builds it from the ADTS header. The
     // last source is go2rtc's loopback that transcodes that AAC to the Opus WebRTC needs, on demand.
+    // `asetpts=N/SR/TB` re-stamps the decoded audio from its sample count: on some cameras (a T8214)
+    // go2rtc's AAC timestamps advance ~0.23 s per 0.064 s packet, so the Opus ran ~5x faster than real
+    // time and played back choppy. Where the timestamps are already right it changes nothing.
     const base = `http://${cfg.selfHost}:${cfg.port}`;
     lines.push(`  ${d.sn}:`);
     lines.push(`    - ffmpeg:${base}/stream/${d.sn}#video=copy#async`);
     lines.push(`    - ${base}/audio/${d.sn}`);
-    lines.push(`    - ffmpeg:${d.sn}#audio=opus`);
+    lines.push(`    - ffmpeg:${d.sn}#audio=opus#raw=-af asetpts=N/SR/TB`);
   }
   const yaml = lines.join("\n") + "\n";
   await mkdir(dirname(cfg.go2rtcConfig), { recursive: true }).catch(() => {});

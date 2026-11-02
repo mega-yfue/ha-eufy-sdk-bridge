@@ -32,7 +32,10 @@ test("every camera stream is generated with #async", async () => {
 
 test("each camera's audio is read by go2rtc itself, with an Opus loopback for WebRTC", async () => {
   const { yaml } = await generate();
-  assert.match(yaml, /#async\n {4}- http:\/\/127\.0\.0\.1:3000\/audio\/CAM1\n {4}- ffmpeg:CAM1#audio=opus\n/);
+  assert.match(
+    yaml,
+    /#async\n {4}- http:\/\/127\.0\.0\.1:3000\/audio\/CAM1\n {4}- ffmpeg:CAM1#audio=opus#raw=-af asetpts=N\/SR\/TB\n/,
+  );
   assert.ok(!yaml.includes("audio=copy"), "an ffmpeg copy of raw ADTS fails on RTSP and loses the audio track");
 });
 
