@@ -149,13 +149,34 @@ test("a station that has answered the direct read is never asked latest-info", a
   assert.ok(!station.asked.includes("10013@0"));
 });
 
-test("a station silent on both forms stops being asked latest-info after three tries", async () => {
+test("a station silent on both forms is not asked latest-info again straight after three tries", async () => {
   const station = fakeStation({});
   const { warm, log } = setup(station);
 
   for (let i = 0; i < 5; i++) await run(() => warm.refreshLastEventImageFor("CAM1"));
   assert.equal(station.asked.filter((a) => a === "10013@0").length, 3);
   assert.ok(log.includes("history query: no records parsed (raw 0B received; latest-info unanswered too)"));
+});
+
+test("a station that has never answered is asked latest-info again after the retry interval", async () => {
+  let latest;
+  const station = fakeStation({ latest: () => latest?.() });
+  const { warm, log } = setup(station);
+  const realNow = Date.now;
+  let now = 1_000_000;
+  Date.now = () => now;
+  try {
+    for (let i = 0; i < 4; i++) await run(() => warm.refreshLastEventImageFor("CAM1"));
+    assert.equal(station.asked.filter((a) => a === "10013@0").length, 3, "three tries, then it waits");
+
+    now += 10 * 60_000; // the camera restarted, and answers again
+    latest = latestFor("/media/mmcblk0p1/video/20261013100000_c01.jpg", 41);
+    assert.equal(await run(() => warm.refreshLastEventImageFor("CAM1")), true);
+    assert.equal(station.asked.filter((a) => a === "10013@0").length, 4);
+    assert.ok(log.includes("latest-info: CAM1 event_count=41 crop=20261013100000_c01.jpg (first seen, taken)"));
+  } finally {
+    Date.now = realNow;
+  }
 });
 
 test("a station that has answered latest-info is still asked after it falls silent", async () => {
