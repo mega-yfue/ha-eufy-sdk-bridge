@@ -219,7 +219,7 @@ export function createWsServer(ctx, httpServer) {
           return reply({
             path: `/stream/${msg.sn}`,
             http: `http://${cfg.selfHost}:${cfg.port}/stream/${msg.sn}`,
-            rtsp: `rtsp://${cfg.selfHost}:8554/${msg.sn}`,
+            rtsp: `rtsp://${cfg.selfHost}:${cfg.go2rtcRtspPort}/${msg.sn}`,
           });
         case "stream.stop":
           return reply({}); // advisory; the media connection is the real signal
