@@ -17,10 +17,6 @@ function json(res, code, body) {
   res.end(s);
 }
 
-// go2rtc's HTTP API (the fixed `:1984` the generated go2rtc.yaml listens on). Used only to answer
-// "who is pulling this stream?": the bridge's `/stream` is always pulled by go2rtc's OWN ffmpeg, so the
-// bridge alone can't see the human behind it — go2rtc can (it tracks each WebRTC/RTSP/HLS consumer).
-const GO2RTC_API_PORT = Number(process.env.GO2RTC_API_PORT) || 1984;
 // Throttle the go2rtc consumer probe per device (a stream can be re-requested on a tight retry loop).
 // `0` disables the probe; the immediate-requester line still logs on every request.
 const STREAM_CONSUMER_LOG_MS = Number(process.env.BRIDGE_STREAM_CONSUMER_LOG_MS ?? 15000);
@@ -60,9 +56,12 @@ export function createHttpHandler(ctx) {
   // a WebRTC/HLS client) rather than the go2rtc ffmpeg the bridge sees. Best-effort: on any error (go2rtc
   // disabled / not ready) the immediate-requester line already logged is the fallback.
   const lastConsumerLog = new Map(); // sn -> ts of the last probe
+  // go2rtc's HTTP API, which tracks each WebRTC/RTSP/HLS consumer; the bridge's `/stream` is always
+  // pulled by go2rtc's OWN ffmpeg, so the bridge alone can't see the human behind it.
+  const go2rtcApiPort = cfg?.go2rtcApiPort ?? 1984;
   async function logStreamConsumers(sn) {
     try {
-      const r = await fetch(`http://127.0.0.1:${GO2RTC_API_PORT}/api/streams?src=${encodeURIComponent(sn)}`);
+      const r = await fetch(`http://127.0.0.1:${go2rtcApiPort}/api/streams?src=${encodeURIComponent(sn)}`);
       if (!r.ok) return;
       const data = await r.json();
       const consumers = (data?.consumers ?? data?.[sn]?.consumers ?? []).filter(Boolean);

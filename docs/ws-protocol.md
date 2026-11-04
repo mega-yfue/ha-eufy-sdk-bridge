@@ -320,7 +320,8 @@ values on the order of minutes, so intervals below ~1 min mostly add load withou
 ### `stream.start`
 
 Returns the URLs for a camera's live video. **Does not open the camera** — connecting to the URL is
-what starts it; disconnecting stops it. _(Requires auth.)_
+what starts it; disconnecting stops it. _(Requires auth.)_ The host is `BRIDGE_SELF_HOST` and the RTSP
+port is `GO2RTC_RTSP_PORT` (default `8554`), the port the bundled go2rtc listens on.
 
 ```jsonc
 // →

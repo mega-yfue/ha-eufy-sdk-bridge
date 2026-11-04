@@ -80,6 +80,12 @@ export function loadConfig(env = process.env) {
     // instead of the one bundled here. Default ON to match existing behavior; set GO2RTC_ENABLE=0 to skip
     // spawning it.
     go2rtcEnable: env.GO2RTC_ENABLE == null ? true : truthy(env.GO2RTC_ENABLE),
+    // The ports go2rtc listens on. The generated go2rtc.yaml, the `stream.start` RTSP URL and the
+    // consumer probe all read these, so moving go2rtc off a port another go2rtc already holds (Frigate's,
+    // or the go2rtc add-on beside a host-networked bridge) is one variable, not a hand-edited YAML.
+    go2rtcApiPort: positiveInt(env.GO2RTC_API_PORT) ?? 1984,
+    go2rtcRtspPort: positiveInt(env.GO2RTC_RTSP_PORT) ?? 8554,
+    go2rtcWebrtcPort: positiveInt(env.GO2RTC_WEBRTC_PORT) ?? 8555,
     selfHost: env.BRIDGE_SELF_HOST || "127.0.0.1",
     // Cloud poll interval (ms). Unset → the SDK default (600000 = 10 min). Changeable live via the
     // config.set WS command. 0 disables polling.
