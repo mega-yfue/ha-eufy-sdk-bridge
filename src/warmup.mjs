@@ -145,10 +145,23 @@ export function createWarmup(ctx) {
   // station whose direct read merely dropped once never swaps to the older form.
   const directReadAnswered = new Set();
   // Per device, the latest-info crop path last seen, and per station, how many latest-info queries in a
-  // row went unanswered (a standalone camera answers neither form; it stops being asked after a few).
+  // row went unanswered. One that has answered keeps being asked: a T8200 can miss three in a row and
+  // answer the next. One that has not is asked at most every LATEST_INFO_RETRY_MS after three misses, never
+  // given up on: a T8200 silent for a while after the bridge (or the camera) restarts answers again later,
+  // and a station that never answers costs one read per interval.
   const latestInfoPath = new Map();
   const latestInfoSilent = new Map();
+  const latestInfoAnswered = new Set();
+  const latestInfoAskedAt = new Map();
   const LATEST_INFO_MAX_SILENT = 3;
+  const LATEST_INFO_RETRY_MS = Number(process.env.EVENT_IMAGE_LATEST_INFO_RETRY_MS) || 10 * 60_000;
+
+  /** Whether a station silent on the direct read should be asked latest-info now. */
+  function latestInfoDue(stationSn) {
+    if (latestInfoAnswered.has(stationSn) || (latestInfoSilent.get(stationSn) ?? 0) < LATEST_INFO_MAX_SILENT)
+      return true;
+    return Date.now() - (latestInfoAskedAt.get(stationSn) ?? 0) >= LATEST_INFO_RETRY_MS;
+  }
 
   /**
    * The latest-info query (inner cmd **10013**, mChannel **0**), as eufy-security-client sends it. It
@@ -166,6 +179,7 @@ export function createWarmup(ctx) {
     let chunk = "";
     const onChunk = ({ text }) => (chunk += text);
     session.on("dbChunk", onChunk);
+    latestInfoAskedAt.set(stationSn, Date.now());
     session.queryDatabase("history_record_info", { accountId, innerCmd: 10013, channel: 0 });
     let obj;
     for (let i = 0; i < 20 && !Array.isArray(obj?.data); i++) {
@@ -176,10 +190,12 @@ export function createWarmup(ctx) {
 
     const entries = Array.isArray(obj?.data) ? obj.data : undefined;
     if (!entries) {
-      latestInfoSilent.set(stationSn, (latestInfoSilent.get(stationSn) ?? 0) + 1);
+      if (!latestInfoAnswered.has(stationSn))
+        latestInfoSilent.set(stationSn, (latestInfoSilent.get(stationSn) ?? 0) + 1);
       return undefined;
     }
     latestInfoSilent.delete(stationSn);
+    latestInfoAnswered.add(stationSn);
     const taken = [];
     for (const rec of entries) {
       const dsn = rec?.device_sn;
@@ -246,7 +262,7 @@ export function createWarmup(ctx) {
     let records = parsed?.data ?? firstJsonObject(chunk)?.data ?? [];
     let received = `raw ${chunk.length}B received`;
     if (chunk.length) directReadAnswered.add(stationSn);
-    else if (!directReadAnswered.has(stationSn) && (latestInfoSilent.get(stationSn) ?? 0) < LATEST_INFO_MAX_SILENT) {
+    else if (!directReadAnswered.has(stationSn) && latestInfoDue(stationSn)) {
       const latest = await queryLatestInfoCovers(session, accountId, stationSn);
       if (latest) [records, received] = [latest, undefined];
       else received += "; latest-info unanswered too";
