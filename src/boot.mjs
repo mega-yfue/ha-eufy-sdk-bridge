@@ -4,6 +4,7 @@
 // kicked off after `ready` so they don't hold up serving.
 import { spawn } from "node:child_process";
 import { writeGo2rtcConfig } from "../go2rtc-config.mjs";
+import { pushFieldSummary } from "./push-trace.mjs";
 
 /**
  * One-shot boot diagnostic: print each camera's station + P2P channel so a same-model collision is
@@ -83,6 +84,7 @@ export function createBoot(ctx) {
         eufy.on("p2pConnect", (sn) => dbg(`p2pConnect station=${sn}`));
         eufy.on("p2pClose", (sn) => dbg(`p2pClose station=${sn}`));
         eufy.on("commandAck", (info) => dbg(`commandAck ${JSON.stringify(info)}`));
+        eufy.on("push", (ev) => dbg(pushFieldSummary(ev)));
       }
       eufy.on("push", (ev) => ctx.noteRecording?.(ev)); // the recording a detection named, for /clip
       for (const e of FORWARDED_EVENTS)

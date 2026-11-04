@@ -31,6 +31,7 @@ export function createDeviceView(ctx) {
       capabilities: m.capabilities,
       state: propertyState(dev), // live property values ({ battery: 74, motion: false, … })
       ...decodedReadings(dev, m),
+      ...liveness(m.sn), // availability facts a host turns into an online/offline verdict
       stream: isCamera ? `/stream/${m.sn}` : undefined,
       streaming: isCamera ? streaming.has(m.sn) : undefined, // live P2P feed active right now?
       // "battery" | "wired", decided the way the SDK decides it (power.mjs): the `battery` capability alone
@@ -44,6 +45,27 @@ export function createDeviceView(ctx) {
   function propertyState(dev) {
     const out = {};
     for (const [name, pv] of Object.entries(dev.getProperties())) out[name] = pv.value;
+    return out;
+  }
+
+  /**
+   * The SDK's honest liveness FACTS for a device — never an online/offline verdict, which is a
+   * per-device threshold the host owns (see the SDK's `DeviceState` doc). `availability` is the explicit
+   * vendor observation when one has been seen (authoritative); `lastSeenMs` is when the device last
+   * reported to the cloud. Both are omitted when the SDK has nothing — an older SDK, or a device that
+   * has never emitted the signal — so a host that relies on `state.deviceStatus` is unaffected.
+   */
+  function liveness(sn) {
+    const out = {};
+    const lastSeenMs = eufy.deviceState?.(sn)?.lastSeenMs;
+    if (typeof lastSeenMs === "number") out.lastSeenMs = lastSeenMs;
+    const availability = eufy.deviceAvailability?.(sn)?.availability;
+    if (availability === "available" || availability === "unavailable") out.availability = availability;
+    // A P2P session keyed by the device's OWN serial means a STANDALONE device with a live transport —
+    // proof it is reachable right now, even while it only sends transport keepalives and no param frames
+    // (so `lastSeenMs` stays put). A HomeBase-attached device's session is keyed by the HomeBase, not by
+    // the device, so this never fires for a child camera — a parent being up does not prove the child is.
+    if (eufy.getP2pSessions?.().get(sn)?.isConnected === true) out.p2pReachable = true;
     return out;
   }
 
