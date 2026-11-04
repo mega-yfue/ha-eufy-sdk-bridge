@@ -21,6 +21,10 @@ Video is deliberately **not** on the WebSocket: the WS hands back a URL, and _co
 is what starts the camera — disconnecting is what stops it_. There is no "stream is running" flag to
 drift out of sync.
 
+Camera summaries advertise SDK-supported optical views and their stream, snapshot and go2rtc source
+identifiers. A secondary optic uses `?view=<view>` on the HTTP endpoints; the primary URLs stay unchanged.
+See [optical views](./docs/ws-protocol.md#optical-views) for selection, older-SDK behavior and per-view stills.
+
 ## Run it
 
 Pull the published image and run it (bundles the SDK + go2rtc):

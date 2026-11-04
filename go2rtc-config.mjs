@@ -33,7 +33,9 @@ export async function writeGo2rtcConfig(cfg, devices) {
     // reads as a broken stream: Home Assistant aborts with "Timestamp discontinuity detected: last dts =
     // 0, dts = 4219155056" seconds after the picture starts flowing. Re-stamping costs nothing here —
     // the feed is remuxed, not transcoded, and a live view has no timeline to preserve.
-    lines.push(`  ${d.sn}: ffmpeg:http://${cfg.selfHost}:${cfg.port}/stream/${d.sn}#video=copy#async`);
+    for (const view of d.views ?? [{ id: d.sn, stream: d.stream }]) {
+      lines.push(`  ${view.id}: ffmpeg:http://${cfg.selfHost}:${cfg.port}${view.stream}#video=copy#async`);
+    }
   }
   const yaml = lines.join("\n") + "\n";
   await mkdir(dirname(cfg.go2rtcConfig), { recursive: true }).catch(() => {});
