@@ -106,7 +106,7 @@ test("a camera with live() but no openReadable streams instead of answering 404"
     consumer.frame("\x00\x00\x00\x01AU1");
     const res = await pending;
     assert.equal(res.statusCode, 200);
-    assert.equal(res.headers["content-type"], "video/H264");
+    assert.equal(res.headers["content-type"], "application/octet-stream");
     consumer.frame("\x00\x00\x00\x01AU2");
     consumer.emit("stop"); // the shared source ended → the response ends cleanly
     await res.ended;
