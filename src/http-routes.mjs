@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { streamClientFor, dropStreamClient, isSupersededStreamClient } from "../streams.mjs";
 import { createLiveStillTap } from "./live-still.mjs";
+import { liveFeedOpener } from "./live-feed.mjs";
 import { onBatteryPower } from "./power.mjs";
 import { storedThumbnailSeenAt } from "./stored-thumbnail.mjs";
 import { redactSecrets } from "./redact.mjs";
@@ -325,8 +326,8 @@ export function createHttpHandler(ctx) {
         lease = openStreamClient(sn, cfg); // its OWN P2P session — see streams.mjs
         const client = await lease;
         const dev = await client.getDevice(sn);
-        const cam = dev.camera?.();
-        if (!cam?.openReadable) {
+        const openFeed = liveFeedOpener(dev.camera?.());
+        if (!openFeed) {
           res.off("close", onGone);
           return json(res, 404, { error: "no live video on this device" });
         }
@@ -334,7 +335,7 @@ export function createHttpHandler(ctx) {
         // The battery budget only takes effect when this call opens the session, which it does: the stream
         // client is dedicated to /stream (stills go through the control client), so nothing opens it first.
         const budget = cfg.streamBatteryBudgetMs;
-        const feed = await cam.openReadable(budget ? { batteryBudgetMs: budget } : undefined); // Annex-B
+        const feed = await openFeed(budget ? { batteryBudgetMs: budget } : undefined); // Annex-B
         res.off("close", onGone);
         ctx.noteStreamOpened?.(sn); // reachable again → clear any failure backoff
         if (gone) {
