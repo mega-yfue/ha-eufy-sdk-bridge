@@ -16,6 +16,7 @@ import fs from "node:fs";
 import { loadConfig } from "./src/config.mjs";
 import { checkWebRtcLibrary } from "./src/webrtc-check.mjs";
 import { installConsoleRedaction } from "./src/redact.mjs";
+import { installConsoleTimestamps } from "./src/log-time.mjs";
 import { loadBridgeId } from "./src/bridge-id.mjs";
 import { createState } from "./src/state.mjs";
 import { createEufy } from "./src/client.mjs";
@@ -34,6 +35,7 @@ import { closeStreamClients } from "./streams.mjs";
 
 // Before anything logs: no echoed credential reaches the console (see redact.mjs).
 installConsoleRedaction();
+if (/^(1|true|yes|on)$/i.test(process.env.LOG_TIMESTAMPS ?? "")) installConsoleTimestamps();
 const config = loadConfig();
 const { cfg, DEBUG, DEBUG_P2P, EVENT_LOG, eventImageDir } = config;
 

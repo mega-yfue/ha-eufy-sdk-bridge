@@ -152,9 +152,14 @@ export function createWsServer(ctx, httpServer) {
           const args = Array.isArray(msg.args) ? msg.args : [];
           const dev = await eufy.getDevice(msg.sn);
           // Capability surfaces that expose actions. Add more accessors here as needed.
-          const surfaces = [dev.smartLight?.(), dev.camera?.(), dev.lock?.(), dev.siren?.(), dev.ptz?.()].filter(
-            Boolean,
-          );
+          const surfaces = [
+            dev.smartLight?.(),
+            dev.camera?.(),
+            dev.lock?.(),
+            dev.siren?.(),
+            dev.ptz?.(),
+            dev.smartDrop?.(),
+          ].filter(Boolean);
           // A dotted action walks a sub-API namespace: `preset.goto` is `ptz().preset().goto(id)`.
           // Every segment before the leaf ANSWERS — it hands back the namespace without acting — so it
           // takes no arguments; only the leaf is called with `args`.
@@ -219,7 +224,7 @@ export function createWsServer(ctx, httpServer) {
           return reply({
             path: `/stream/${msg.sn}`,
             http: `http://${cfg.selfHost}:${cfg.port}/stream/${msg.sn}`,
-            rtsp: `rtsp://${cfg.selfHost}:8554/${msg.sn}`,
+            rtsp: `rtsp://${cfg.selfHost}:${cfg.go2rtcRtspPort}/${msg.sn}`,
           });
         case "stream.stop":
           return reply({}); // advisory; the media connection is the real signal

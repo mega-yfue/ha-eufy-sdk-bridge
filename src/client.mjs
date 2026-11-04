@@ -4,6 +4,17 @@
 import { EufyMega, FileSessionStore, FileFcmStore, ConsoleLogger } from "@mega-yfue/eufy-sdk";
 
 /**
+ * The high-intent events BRIDGE_PREWARM=1 opens a camera's session on, by their SDK `DeviceEventMap`
+ * names: a ring, a person, a pet, a package. Each is the moment a live view usually follows.
+ */
+export const PREWARM_EVENTS = Object.freeze(["doorbellPress", "personDetected", "petDetection", "packageDelivered"]);
+
+/** The `prewarmEvents` the SDK gets: the four high-intent events when pre-warm is on, none when it is off. */
+export function prewarmEventsFor(prewarm) {
+  return prewarm ? [...PREWARM_EVENTS] : [];
+}
+
+/**
  * Build the SDK client from config. `logger` is attached only under BRIDGE_DEBUG_P2P (raw transport logs).
  *
  * The logger is constructed WITHOUT a level so `ConsoleLogger`'s own `"debug"` default applies. The
@@ -25,9 +36,10 @@ export function createEufy({ cfg, DEBUG_P2P }) {
     openudid: cfg.openudid,
     pollMs: cfg.pollMs, // undefined → SDK default; changeable live via config.set
     // Event pre-warm is OFF by default (`[]` = no event opens P2P speculatively) so a battery camera's
-    // radio isn't held open ~28s per doorbell/person/pet/package event. BRIDGE_PREWARM=1 → undefined,
-    // which lets the SDK use its default high-intent pre-warm events.
-    prewarmEvents: cfg.prewarm ? undefined : [],
+    // radio isn't held open ~28s per doorbell/person/pet/package event. BRIDGE_PREWARM=1 names those
+    // four events: the SDK pre-warms on no event unless the caller lists it (`undefined` is an empty
+    // set there, see issue #145), so the bridge has to say which ones.
+    prewarmEvents: prewarmEventsFor(cfg.prewarm),
     logger: DEBUG_P2P ? new ConsoleLogger() : undefined,
   });
   memoizeGetDevice(eufy);

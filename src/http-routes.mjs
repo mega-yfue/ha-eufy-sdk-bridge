@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { streamClientFor, dropStreamClient, isSupersededStreamClient } from "../streams.mjs";
 import { createLiveStillTap } from "./live-still.mjs";
+import { liveFeedOpener } from "./live-feed.mjs";
 import { onBatteryPower } from "./power.mjs";
 import { storedThumbnailSeenAt } from "./stored-thumbnail.mjs";
 import { redactSecrets } from "./redact.mjs";
@@ -16,10 +17,6 @@ function json(res, code, body) {
   res.end(s);
 }
 
-// go2rtc's HTTP API (the fixed `:1984` the generated go2rtc.yaml listens on). Used only to answer
-// "who is pulling this stream?": the bridge's `/stream` is always pulled by go2rtc's OWN ffmpeg, so the
-// bridge alone can't see the human behind it — go2rtc can (it tracks each WebRTC/RTSP/HLS consumer).
-const GO2RTC_API_PORT = Number(process.env.GO2RTC_API_PORT) || 1984;
 // Throttle the go2rtc consumer probe per device (a stream can be re-requested on a tight retry loop).
 // `0` disables the probe; the immediate-requester line still logs on every request.
 const STREAM_CONSUMER_LOG_MS = Number(process.env.BRIDGE_STREAM_CONSUMER_LOG_MS ?? 15000);
@@ -59,9 +56,12 @@ export function createHttpHandler(ctx) {
   // a WebRTC/HLS client) rather than the go2rtc ffmpeg the bridge sees. Best-effort: on any error (go2rtc
   // disabled / not ready) the immediate-requester line already logged is the fallback.
   const lastConsumerLog = new Map(); // sn -> ts of the last probe
+  // go2rtc's HTTP API, which tracks each WebRTC/RTSP/HLS consumer; the bridge's `/stream` is always
+  // pulled by go2rtc's OWN ffmpeg, so the bridge alone can't see the human behind it.
+  const go2rtcApiPort = cfg?.go2rtcApiPort ?? 1984;
   async function logStreamConsumers(sn) {
     try {
-      const r = await fetch(`http://127.0.0.1:${GO2RTC_API_PORT}/api/streams?src=${encodeURIComponent(sn)}`);
+      const r = await fetch(`http://127.0.0.1:${go2rtcApiPort}/api/streams?src=${encodeURIComponent(sn)}`);
       if (!r.ok) return;
       const data = await r.json();
       const consumers = (data?.consumers ?? data?.[sn]?.consumers ?? []).filter(Boolean);
@@ -325,8 +325,8 @@ export function createHttpHandler(ctx) {
         lease = openStreamClient(sn, cfg); // its OWN P2P session — see streams.mjs
         const client = await lease;
         const dev = await client.getDevice(sn);
-        const cam = dev.camera?.();
-        if (!cam?.openReadable) {
+        const openFeed = liveFeedOpener(dev.camera?.());
+        if (!openFeed) {
           res.off("close", onGone);
           return json(res, 404, { error: "no live video on this device" });
         }
@@ -334,7 +334,7 @@ export function createHttpHandler(ctx) {
         // The battery budget only takes effect when this call opens the session, which it does: the stream
         // client is dedicated to /stream (stills go through the control client), so nothing opens it first.
         const budget = cfg.streamBatteryBudgetMs;
-        const feed = await cam.openReadable(budget ? { batteryBudgetMs: budget } : undefined); // Annex-B
+        const feed = await openFeed(budget ? { batteryBudgetMs: budget } : undefined); // Annex-B
         res.off("close", onGone);
         ctx.noteStreamOpened?.(sn); // reachable again → clear any failure backoff
         if (gone) {
@@ -354,7 +354,7 @@ export function createHttpHandler(ctx) {
         streaming.add(sn);
         activeStreams.set(sn, entry);
         rtspLastActive.set(sn, Date.now()); // a live stream counts as activity for the rtspStream auto-off
-        res.writeHead(200, { "content-type": "video/H264", "cache-control": "no-cache" });
+        res.writeHead(200, { "content-type": "application/octet-stream", "cache-control": "no-cache" });
         feed.pipe(res);
         // Remember the stream's latest keyframe so the still can show what was last SEEN, not only the
         // last event — without ever waking the camera for it (see live-still.mjs).
