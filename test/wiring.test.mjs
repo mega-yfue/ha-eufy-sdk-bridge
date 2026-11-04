@@ -40,7 +40,25 @@ function fakeEufy() {
     trigger: async (seconds) => void sirenCalls.push(["trigger", seconds]),
     stop: async () => void sirenCalls.push(["stop"]),
   };
+  // Mirrors the SDK's `smartDrop` surface on a standalone SmartDrop: `openLid()`, a fire-and-forget
+  // dispatch, recorded so the routing test can assert on it.
+  const smartDropCalls = [];
+  const smartDropSurface = {
+    openLid: async () => void smartDropCalls.push(["openLid"]),
+  };
   const devices = {
+    DROP1: {
+      describe: () => ({
+        sn: "DROP1",
+        name: "Parcel box",
+        model: "T8790",
+        modelName: "SmartDrop",
+        codec: "camera",
+        capabilities: ["camera", "video", "battery", "smart_drop"],
+      }),
+      getProperties: () => ({ battery: { value: 80 } }),
+      smartDrop: () => smartDropSurface,
+    },
     CAM1: {
       describe: () => ({
         sn: "CAM1",
@@ -91,6 +109,7 @@ function fakeEufy() {
   return {
     ptzCalls, // what the fake ptz surface was asked to do, for the device.action test
     sirenCalls, // what the fake siren surface was asked to do, for the device.action test
+    smartDropCalls, // what the fake smartDrop surface was asked to do, for the device.action test
     pollIntervalMs: 600000,
     async getDevices() {
       return [{ sn: "CAM1" }, { sn: "PTCAM1" }, { sn: "SIRENCAM1" }, { sn: "SENSOR1" }];
@@ -205,6 +224,23 @@ test("device.action: routes siren trigger/stop, and only where the surface exist
   assert.equal(absent[0].ok, false);
   assert.match(absent[0].error, /no action 'trigger'/);
   assert.deepEqual(ctx.eufy.sirenCalls, [["trigger", 10], ["stop"]]); // unchanged
+
+  httpServer.close();
+});
+
+test("device.action: routes openLid to a SmartDrop's smartDrop surface, and only there", async () => {
+  const { ctx, state, httpServer } = buildCtx();
+  state.flags.ready = true;
+
+  const opened = await wsCall(ctx, { id: 1, cmd: "device.action", sn: "DROP1", action: "openLid" });
+  assert.equal(opened[0].ok, true);
+  assert.deepEqual(ctx.eufy.smartDropCalls, [["openLid"]]);
+
+  // A camera without the smart_drop capability has no surface carrying the verb, so it fails loudly.
+  const absent = await wsCall(ctx, { id: 2, cmd: "device.action", sn: "CAM1", action: "openLid" });
+  assert.equal(absent[0].ok, false);
+  assert.match(absent[0].error, /no action 'openLid'/);
+  assert.deepEqual(ctx.eufy.smartDropCalls, [["openLid"]]); // unchanged
 
   httpServer.close();
 });
