@@ -127,8 +127,8 @@ export function loadConfig(env = process.env) {
     clipSettleMs: env.CLIP_SETTLE_MS != null ? Number(env.CLIP_SETTLE_MS) : 30_000,
     // Event pre-warm: the SDK can speculatively open a camera's P2P session on a high-intent event
     // (doorbell/person/pet/package) so a following live view starts instantly. OFF by default here — it
-    // holds a battery camera's radio open for ~28s per event. Set BRIDGE_PREWARM=1 to enable the SDK's
-    // default pre-warm events.
+    // holds a battery camera's radio open for ~28s per event. Set BRIDGE_PREWARM=1 to pre-warm on the four
+    // events named in client.mjs (the SDK pre-warms on none unless the caller lists them).
     prewarm: truthy(env.BRIDGE_PREWARM),
     // "Last event" local-cover refresh over P2P. On every detection the bridge queries the HomeBase's
     // history DB + local cover (and warms the face roster + last-event images at startup, and auto-heals

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { loadConfig } from "../src/config.mjs";
+import { prewarmEventsFor, PREWARM_EVENTS } from "../src/client.mjs";
 
 const base = { EUFY_EMAIL: "x@y.z", EUFY_PASSWORD: "pw" };
 
@@ -11,10 +12,18 @@ test("event pre-warm is OFF by default", () => {
   assert.equal(loadConfig({ ...base, EUFY_LOCAL_EVENT_REFRESH: "off" }).cfg.localEventRefresh, false);
 });
 
-test("BRIDGE_PREWARM=1 turns pre-warm on (SDK default events)", () => {
+test("BRIDGE_PREWARM=1 turns pre-warm on", () => {
   assert.equal(loadConfig({ ...base, BRIDGE_PREWARM: "1" }).cfg.prewarm, true);
   assert.equal(loadConfig({ ...base, BRIDGE_PREWARM: "true" }).cfg.prewarm, true);
   assert.equal(loadConfig({ ...base, BRIDGE_PREWARM: "0" }).cfg.prewarm, false);
+});
+
+test("pre-warm on names the four high-intent events; off names none (#145)", () => {
+  // The SDK turns an undefined `prewarmEvents` into an empty set, so the bridge must list the events itself.
+  assert.deepEqual(prewarmEventsFor(true), ["doorbellPress", "personDetected", "petDetection", "packageDelivered"]);
+  assert.deepEqual(prewarmEventsFor(true), [...PREWARM_EVENTS]);
+  assert.deepEqual(prewarmEventsFor(false), []);
+  assert.notEqual(prewarmEventsFor(true), prewarmEventsFor(true)); // a fresh array per client, never the frozen list
 });
 
 test("FCM push store path is derived beside the session file", () => {
