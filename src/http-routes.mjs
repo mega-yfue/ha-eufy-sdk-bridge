@@ -354,7 +354,7 @@ export function createHttpHandler(ctx) {
         streaming.add(sn);
         activeStreams.set(sn, entry);
         rtspLastActive.set(sn, Date.now()); // a live stream counts as activity for the rtspStream auto-off
-        res.writeHead(200, { "content-type": "video/H264", "cache-control": "no-cache" });
+        res.writeHead(200, { "content-type": "application/octet-stream", "cache-control": "no-cache" });
         feed.pipe(res);
         // Remember the stream's latest keyframe so the still can show what was last SEEN, not only the
         // last event — without ever waking the camera for it (see live-still.mjs).

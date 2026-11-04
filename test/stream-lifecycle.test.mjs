@@ -84,12 +84,16 @@ async function setup() {
 
 /** Open /stream/CAM1 and collect what arrives; `done` settles with how the response ended. */
 function pull(t) {
-  const out = { bytes: 0, ended: false, aborted: false };
+  const out = { bytes: 0, chunks: [], ended: false, aborted: false };
   out.req = http.get({ host: "127.0.0.1", port: t.port, path: "/stream/CAM1" });
   out.done = new Promise((resolve) => {
     out.req.on("response", (res) => {
       out.status = res.statusCode;
-      res.on("data", (c) => (out.bytes += c.length));
+      out.contentType = res.headers["content-type"];
+      res.on("data", (c) => {
+        out.bytes += c.length;
+        out.chunks.push(c);
+      });
       res.on("end", () => {
         out.ended = true;
         resolve(out);
@@ -132,6 +136,40 @@ test("a clean end of the feed ends the response with every byte (control case)",
     assert.equal(out.bytes, 1500);
     await until(() => !t.state.streaming.has("CAM1"), "streaming cleared");
     assert.equal(t.state.activeStreams.has("CAM1"), false);
+  } finally {
+    await t.close();
+  }
+});
+
+test("raw HEVC Annex-B bytes reach the HTTP consumer with a codec-neutral content type", async () => {
+  const t = await setup();
+  try {
+    const p = pull(t);
+    await until(() => t.feeds.length === 1, "feed opened");
+    const hevc = Buffer.from("0000000140010c010000000142010101", "hex");
+    t.feeds[0].end(hevc);
+    const out = await settled(p);
+    assert.equal(out.status, 200);
+    assert.equal(out.contentType, "application/octet-stream");
+    assert.deepEqual(Buffer.concat(out.chunks), hevc);
+    assert.equal(out.ended, true);
+  } finally {
+    await t.close();
+  }
+});
+
+test("raw H.264 Annex-B bytes also reach the HTTP consumer unchanged", async () => {
+  const t = await setup();
+  try {
+    const p = pull(t);
+    await until(() => t.feeds.length === 1, "feed opened");
+    const h264 = Buffer.from("000000016742001f0000000168ce06000000016588", "hex");
+    t.feeds[0].end(h264);
+    const out = await settled(p);
+    assert.equal(out.status, 200);
+    assert.equal(out.contentType, "application/octet-stream");
+    assert.deepEqual(Buffer.concat(out.chunks), h264);
+    assert.equal(out.ended, true);
   } finally {
     await t.close();
   }
