@@ -81,3 +81,5 @@ npm run lint      # prettier --check .   (npm run format to fix)
 Every PR into `main` or `dev` runs the CI gate ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)):
 `npm ci` → lint → compile (`node --check` on each `.mjs`) → test. `main` is the public release line;
 `dev` is the development line (rolling `:dev` image).
+
+T8400/T8410 live feeds use a named raw H.264 ffmpeg input to avoid format-probe misidentification. Video remains copied with wall-clock timestamps (`#async`); other models retain automatic input detection. This does not transcode H.265 feeds.
