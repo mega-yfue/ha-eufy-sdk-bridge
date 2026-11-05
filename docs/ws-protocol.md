@@ -323,6 +323,9 @@ Returns the URLs for a camera's live video. **Does not open the camera** — con
 what starts it; disconnecting stops it. _(Requires auth.)_ The host is `BRIDGE_SELF_HOST` and the RTSP
 port is `GO2RTC_RTSP_PORT` (default `8554`), the port the bundled go2rtc listens on.
 
+An optional integer `view` selects an SDK-advertised optical view. An unsupported view or a value of
+another type is refused. Omission retains the existing primary source and URLs. Selection opens no media.
+
 ```jsonc
 // →
 { "id": 7, "cmd": "stream.start", "sn": "EXAMPLE-CAM-0001" }
@@ -451,6 +454,52 @@ Fired when a camera's live P2P feed opens (`active: true`) or is torn down / idl
 ---
 
 ## Sibling HTTP endpoints
+
+### Optical views
+
+Camera summaries in `devices.list` and `device.state` additionally carry `views`, derived from the
+bound SDK camera's `views()` inventory. An SDK without that inventory exposes only the primary view.
+The bridge does not infer views from camera models, lens names or station topology. For example:
+
+```json
+{
+  "sn": "EXAMPLE-CAM-0001",
+  "stream": "/stream/EXAMPLE-CAM-0001",
+  "views": [
+    {
+      "view": 0,
+      "id": "EXAMPLE-CAM-0001",
+      "stream": "/stream/EXAMPLE-CAM-0001",
+      "snapshot": "/snapshot/EXAMPLE-CAM-0001"
+    },
+    {
+      "view": 1,
+      "id": "EXAMPLE-CAM-0001_view_1",
+      "stream": "/stream/EXAMPLE-CAM-0001?view=1",
+      "snapshot": "/snapshot/EXAMPLE-CAM-0001?view=1"
+    }
+  ]
+}
+```
+
+`id` names the generated go2rtc source, also used as the RTSP path. View 0 keeps the camera serial and
+the existing endpoints. Additional sources use `<sn>_view_<view>`; the HTTP stream and snapshot paths
+select that view with `?view=<view>`. HTTP accepts one canonical non-negative safe integer selector,
+answers 400 for malformed/repeated selectors, and 404 for views the current SDK does not advertise.
+Each stream forwards its selection to `camera.openReadable()` and releases only its own consumer.
+The existing `streaming` summary, `streamState` events and battery-idle policy remain per physical device.
+
+Snapshots combine `view` with the existing `mode` policy, for example `?view=1&mode=stored`. Secondary
+views use their own persisted live picture and never fall back to an unselected event thumbnail or
+another view's still. With no image for that view, the endpoint returns 404. A successful secondary live
+snapshot is retained for later stored-mode reads; a running stream also retains its selected picture.
+`mode=live` retains its existing same-view fallback behavior. Event images and clips remain per device.
+
+This additive schema-1 extension does not change the SDK dependency pin, transport selection, media
+codec, audio support or concurrency limits. Actual extra views require an SDK route that advertises
+and implements them; registration alone does not establish hardware support for a different topology.
+
+### Endpoint reference
 
 | method + path        | returns                                                                                                     |
 | -------------------- | ----------------------------------------------------------------------------------------------------------- |

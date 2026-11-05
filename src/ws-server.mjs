@@ -6,6 +6,7 @@ import { WebSocketServer } from "ws";
 import { listLightEffects } from "@mega-yfue/eufy-sdk";
 import { SOLIX_CONTROLS, SOLIX_DISABLED } from "./solix.mjs";
 import { redactSecrets } from "./redact.mjs";
+import { cameraViews, cameraView, validView } from "./camera-views.mjs";
 
 // Commands that require an authenticated eufy session — gated in one place before dispatch. (auth.* and
 // solix.* run before this gate, so a client can drive 2FA/captcha and Solix while eufy is still pending.)
@@ -243,13 +244,21 @@ export function createWsServer(ctx, httpServer) {
           eufy.setPollInterval(ms);
           return reply({ pollMs: eufy.pollIntervalMs });
         }
-        case "stream.start":
+        case "stream.start": {
+          const view = msg.view === undefined ? 0 : msg.view;
+          if (!validView(view)) throw new RangeError("view must be a non-negative safe integer");
+          if (msg.view !== undefined) {
+            const camera = (await eufy.getDevice(msg.sn)).camera?.();
+            if (!camera || !cameraViews(camera).includes(view)) throw new RangeError("unsupported camera view");
+          }
+          const source = cameraView(msg.sn, view);
           // Returns URLs; does NOT open the camera — the media connection does that.
           return reply({
-            path: `/stream/${msg.sn}`,
-            http: `http://${cfg.selfHost}:${cfg.port}/stream/${msg.sn}`,
-            rtsp: `rtsp://${cfg.selfHost}:${cfg.go2rtcRtspPort}/${msg.sn}`,
+            path: source.stream,
+            http: `http://${cfg.selfHost}:${cfg.port}${source.stream}`,
+            rtsp: `rtsp://${cfg.selfHost}:${cfg.go2rtcRtspPort}/${source.id}`,
           });
+        }
         case "stream.stop":
           return reply({}); // advisory; the media connection is the real signal
 
