@@ -36,6 +36,17 @@ export function createWsServer(ctx, httpServer) {
     for (const ws of clients) if (ws.readyState === ws.OPEN) ws.send(s);
   };
 
+  // The device as seen through the session of a /stream that is live for it, or null when none is.
+  const liveDeviceFor = async (sn) => {
+    const lease = ctx.state.activeStreams?.get(sn)?.lease;
+    if (!lease) return null;
+    try {
+      return await (await lease).getDevice(sn);
+    } catch {
+      return null; // that session failed meanwhile: the control client takes the command
+    }
+  };
+
   // The smart-light effect gallery is account-wide and costs several HTTP round-trips to enumerate,
   // so fetch it once and cache it (a client can force a refresh with `{ refresh: true }`).
   let effectsCache = null;
@@ -152,12 +163,13 @@ export function createWsServer(ctx, httpServer) {
           const args = Array.isArray(msg.args) ? msg.args : [];
           const dev = await eufy.getDevice(msg.sn);
           // Capability surfaces that expose actions. Add more accessors here as needed.
+          const ptz = dev.ptz?.();
           const surfaces = [
             dev.smartLight?.(),
             dev.camera?.(),
             dev.lock?.(),
             dev.siren?.(),
-            dev.ptz?.(),
+            ptz,
             dev.smartDrop?.(),
           ].filter(Boolean);
           // A dotted action walks a sub-API namespace: `preset.goto` is `ptz().preset().goto(id)`.
@@ -166,17 +178,29 @@ export function createWsServer(ctx, httpServer) {
           const path = action.split(".");
           const leaf = path.pop();
           let target = surfaces.find((s) => typeof s?.[path[0] ?? leaf] === "function");
+          // A PTZ command for a camera that is streaming goes through the stream's own P2P session, which is
+          // connected and has the camera awake. The control client keeps a session of its own, and on a
+          // battery camera over 4G that one has usually dropped (idle) or the camera slept: reconnecting
+          // takes ~30 s, past the caller's reply timeout, so the camera seemed not to turn at all.
+          let via = "";
+          if (target && target === ptz) {
+            const livePtz = (await liveDeviceFor(msg.sn))?.ptz?.();
+            if (typeof livePtz?.[path[0] ?? leaf] === "function") {
+              target = livePtz;
+              via = " via the live stream's session";
+            }
+          }
           for (const seg of path) target = typeof target?.[seg] === "function" ? target[seg]() : undefined;
           if (typeof target?.[leaf] !== "function") return fail(`no action '${action}' on ${msg.sn}`);
           const t0 = Date.now();
-          dbg(`device.action → ${action} sn=${msg.sn} args=${JSON.stringify(args)}`);
+          dbg(`device.action → ${action} sn=${msg.sn} args=${JSON.stringify(args)}${via}`);
           try {
             const result = await target[leaf](...args);
-            dbg(`device.action OK ${action} sn=${msg.sn} (${Date.now() - t0}ms)`);
+            dbg(`device.action OK ${action} sn=${msg.sn} (${Date.now() - t0}ms)${via}`);
             return reply({ result: result ?? null });
           } catch (e) {
             console.error(
-              `[bridge] device.action FAILED ${action} sn=${msg.sn} (${Date.now() - t0}ms): ${e?.name ?? "Error"}: ${e?.message ?? e}`,
+              `[bridge] device.action FAILED ${action} sn=${msg.sn} (${Date.now() - t0}ms)${via}: ${e?.name ?? "Error"}: ${e?.message ?? e}`,
             );
             throw e;
           }
