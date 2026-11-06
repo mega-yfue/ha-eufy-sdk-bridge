@@ -123,6 +123,8 @@ Every device the account exposes. _(Requires `auth.state == "ok"`.)_
 - `model` is the T-code (e.g. `T8410`); `modelName` is the product display name (e.g. `Indoor Cam Pan & Tilt`).
 - `state` is a flat `{ property: value }` map of the device's **current** values; reading it schedules a background refresh, and semantic events (below) push changes between reads.
 - `stream` is present only on devices with live video (cameras/doorbells).
+- `lastScreen` is present on the same devices, on a bridge that serves `GET /last-screen/<sn>` and `screen.take`.
+  A host gates its "last screen" controls on it.
 - `streaming` (cameras/doorbells only) is `true` while a live P2P feed is actually open right now — the
   same signal the `streamState` event carries, so a frontend can seed a "Streaming" sensor from the list.
 - `power` (cameras/doorbells only) is `"battery"` or `"wired"`, decided the way the SDK decides it for its own
