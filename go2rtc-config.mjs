@@ -24,6 +24,8 @@ export async function writeGo2rtcConfig(cfg, devices) {
     `  listen: ":${cfg.go2rtcRtspPort ?? 8554}"`,
     "webrtc:",
     `  listen: ":${cfg.go2rtcWebrtcPort ?? 8555}"`,
+    "ffmpeg:",
+    '  eufy_h264: "-analyzeduration 0 -probesize 32768 -f h264 -i {input}"',
     "streams:",
   ];
   for (const d of cams) {
@@ -33,8 +35,11 @@ export async function writeGo2rtcConfig(cfg, devices) {
     // reads as a broken stream: Home Assistant aborts with "Timestamp discontinuity detected: last dts =
     // 0, dts = 4219155056" seconds after the picture starts flowing. Re-stamping costs nothing here —
     // the feed is remuxed, not transcoded, and a live view has no timeline to preserve.
+    // These indoor models supply raw H.264; probing can mistake it for MPEG audio/TS.
+    // Use a named template: inline {input} is interpreted as a go2rtc source replacement.
+    const input = ["T8400", "T8410"].includes(d.model) ? "#input=eufy_h264" : "";
     for (const view of d.views ?? [{ id: d.sn, stream: d.stream }]) {
-      lines.push(`  ${view.id}: ffmpeg:http://${cfg.selfHost}:${cfg.port}${view.stream}#video=copy#async`);
+      lines.push(`  ${view.id}: ffmpeg:http://${cfg.selfHost}:${cfg.port}${view.stream}#video=copy#async${input}`);
     }
   }
   const yaml = lines.join("\n") + "\n";
