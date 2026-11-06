@@ -55,6 +55,7 @@ export function streamClientOptions(cfg) {
     store: new FileSessionStore(cfg.session), // shared session file → hydrate, no fresh login
     openudid: cfg.openudid, // same identity as the control client (matches the shared session)
     autoRealtime: false, // NEVER start a second push channel — see above
+    p2pPunchSpread: cfg.p2pPunchSpread, // a /stream open needs the wider punch most
   };
 }
 

@@ -34,6 +34,7 @@ export function createEufy({ cfg, DEBUG_P2P }) {
     // Distinct per-install identity when set (BRIDGE_OPENUDID); undefined → the SDK's email-derived
     // default. Set it when running more than one client on an account (see cfg.openudid).
     openudid: cfg.openudid,
+    p2pPunchSpread: cfg.p2pPunchSpread, // undefined → the SDK's ±3
     pollMs: cfg.pollMs, // undefined → SDK default; changeable live via config.set
     // Event pre-warm is OFF by default (`[]` = no event opens P2P speculatively) so a battery camera's
     // radio isn't held open ~28s per doorbell/person/pet/package event. BRIDGE_PREWARM=1 names those
