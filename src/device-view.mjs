@@ -33,6 +33,7 @@ export function createDeviceView(ctx) {
       state: propertyState(dev), // live property values ({ battery: 74, motion: false, … })
       ...decodedReadings(dev, m),
       ...liveness(m.sn), // availability facts a host turns into an online/offline verdict
+      ...stationOf(dev, m.sn), // the station it hangs off: its own serial when standalone
       stream: isCamera ? `/stream/${m.sn}` : undefined,
       views: isCamera ? cameraViews(dev.camera?.()).map((view) => cameraView(m.sn, view)) : undefined,
       streaming: isCamera ? streaming.has(m.sn) : undefined, // live P2P feed active right now?
@@ -41,6 +42,18 @@ export function createDeviceView(ctx) {
       power: isCamera ? (onBatteryPower(m.model, m.capabilities) ? "battery" : "wired") : undefined,
       canReboot: m.codec === "station", // HomeBase-only; drives a Reboot button in HA
     };
+  }
+
+  /**
+   * The station a device hangs off, as `{ stationSn }`: a HomeBase's serial for a camera or sensor attached
+   * to it, the device's own serial for a standalone device or a station. Read from the SDK's device model,
+   * else from its `deviceState`; omitted when neither names one. A host needs it to tell a HomeBase-attached
+   * device, whose transport is its station's and whose `lastSeenMs` moves only when it reports an event,
+   * from a standalone one.
+   */
+  function stationOf(dev, sn) {
+    const stationSn = dev.stationSn ?? eufy.deviceState?.(sn)?.stationSn;
+    return typeof stationSn === "string" && stationSn ? { stationSn } : {};
   }
 
   /** Live property values as a flat `{ name: value }` map (reading schedules a background refresh). */

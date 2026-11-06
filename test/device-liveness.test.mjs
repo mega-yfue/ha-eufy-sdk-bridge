@@ -79,3 +79,17 @@ test("device view omits p2pReachable when only the HomeBase (not the device) has
   const rec = await describeDevice("CAM1");
   assert.ok(!("p2pReachable" in rec));
 });
+
+test("device view names the station a HomeBase-attached device hangs off", async () => {
+  const { describeDevice } = view({
+    deviceState: () => ({ sn: "CAM1", stationSn: "HB1", lastSeenMs: 1_700_000_000_000 }),
+  });
+  const rec = await describeDevice("CAM1");
+  assert.equal(rec.stationSn, "HB1");
+});
+
+test("device view names a standalone device as its own station", async () => {
+  const { describeDevice } = view({ deviceState: () => ({ sn: "CAM1", stationSn: "CAM1" }) });
+  const rec = await describeDevice("CAM1");
+  assert.equal(rec.stationSn, "CAM1");
+});
