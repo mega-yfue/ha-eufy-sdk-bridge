@@ -10,6 +10,7 @@ import { liveFeedOpener } from "./live-feed.mjs";
 import { onBatteryPower } from "./power.mjs";
 import { storedThumbnailSeenAt } from "./stored-thumbnail.mjs";
 import { redactSecrets } from "./redact.mjs";
+import { cameraViews, cameraView, requestedView } from "./camera-views.mjs";
 
 function json(res, code, body) {
   const s = redactSecrets(JSON.stringify(body));
@@ -116,6 +117,16 @@ export function createHttpHandler(ctx) {
     }
     if (!flags.ready) return json(res, 503, { error: "not authenticated", auth: ctx.authStatus() });
 
+    let view = 0;
+    if ((kind === "stream" || kind === "snapshot") && sn) {
+      try {
+        view = requestedView(url.searchParams);
+      } catch (e) {
+        return json(res, 400, { error: e.message });
+      }
+    }
+    const source = cameraView(sn, view);
+
     // A current still: a fresh live burst, falling back to the retained push thumbnail, and finally to
     // the copy /event-image persisted on disk. That last step matters on accounts whose pushes carry no
     // thumbnail: without it every still is a 502 after a 10-20s wake, and the caller (HA, HomeKit) then
@@ -133,8 +144,10 @@ export function createHttpHandler(ctx) {
       // Two pictures can sit on disk: the last event's thumbnail, and the last frame of a stream someone
       // watched (live-still.mjs). Either may be the more recent one, so serve whichever is newer.
       const candidates = [
-        { file: path.join(eventImageDir, `last-live-${sn}.jpg`), label: "last live picture" },
-        { file: path.join(eventImageDir, `last-event-${sn}.jpg`), label: "last event thumbnail" },
+        { file: path.join(eventImageDir, `last-live-${source.id}.jpg`), label: "last live picture" },
+        ...(view === 0
+          ? [{ file: path.join(eventImageDir, `last-event-${sn}.jpg`), label: "last event thumbnail" }]
+          : []),
       ];
       /** Serve the newest persisted picture. Instant, and it never touches the camera. */
       const servePersisted = async (why) => {
@@ -162,6 +175,7 @@ export function createHttpHandler(ctx) {
         const device = await eufy.getDevice(sn);
         const cam = device.camera?.();
         if (!cam) return json(res, 404, { error: "no camera on this device" });
+        if (!cameraViews(cam).includes(view)) return json(res, 404, { error: "unsupported camera view", view });
         // A battery camera pays a radio wake for every still; a mains one does not. Same test the idle
         // watcher uses (see power.mjs), so "which cameras are expensive" is decided in one way.
         const desc = device.describe?.();
@@ -194,7 +208,7 @@ export function createHttpHandler(ctx) {
         let jpeg;
         if (wantLive) {
           try {
-            ({ jpeg } = await cam.snapshotLive());
+            ({ jpeg } = await cam.snapshotLive(view === 0 ? undefined : { view }));
             if (!jpeg) {
               if (snapshotMode === "live") why = "live burst produced no usable image";
               else if (snapshotMode === "auto") why = "mode=auto live burst produced no usable image";
@@ -208,7 +222,7 @@ export function createHttpHandler(ctx) {
           // retains nothing that call costs ~0.85s and never succeeds, and HA re-fetches stills on a timer.
           return;
         }
-        if (!jpeg) {
+        if (!jpeg && view === 0) {
           try {
             jpeg = await cam.snapshotStored?.(); // may throw when nothing is retained
           } catch (e) {
@@ -217,6 +231,9 @@ export function createHttpHandler(ctx) {
           }
         }
         if (jpeg) {
+          if (view !== 0) {
+            await fs.promises.writeFile(candidates[0].file, jpeg).catch(() => {});
+          }
           res.writeHead(200, { "content-type": "image/jpeg", "content-length": jpeg.length });
           return res.end(jpeg);
         }
@@ -325,16 +342,22 @@ export function createHttpHandler(ctx) {
         lease = openStreamClient(sn, cfg); // its OWN P2P session — see streams.mjs
         const client = await lease;
         const dev = await client.getDevice(sn);
-        const openFeed = liveFeedOpener(dev.camera?.());
+        const cam = dev.camera?.();
+        const openFeed = liveFeedOpener(cam);
         if (!openFeed) {
           res.off("close", onGone);
           return json(res, 404, { error: "no live video on this device" });
+        }
+        if (!cameraViews(cam).includes(view)) {
+          res.off("close", onGone);
+          return json(res, 404, { error: "unsupported camera view", view });
         }
         if (gone) return; // don't wake the camera for a viewer that already left
         // The battery budget only takes effect when this call opens the session, which it does: the stream
         // client is dedicated to /stream (stills go through the control client), so nothing opens it first.
         const budget = cfg.streamBatteryBudgetMs;
-        const feed = await openFeed(budget ? { batteryBudgetMs: budget } : undefined); // Annex-B
+        const opts = { ...(budget ? { batteryBudgetMs: budget } : {}), ...(view === 0 ? {} : { view }) };
+        const feed = await openFeed(Object.keys(opts).length ? opts : undefined); // Annex-B
         res.off("close", onGone);
         ctx.noteStreamOpened?.(sn); // reachable again → clear any failure backoff
         if (gone) {
@@ -358,7 +381,7 @@ export function createHttpHandler(ctx) {
         feed.pipe(res);
         // Remember the stream's latest keyframe so the still can show what was last SEEN, not only the
         // last event — without ever waking the camera for it (see live-still.mjs).
-        const still = createLiveStillTap({ sn, dir: eventImageDir, log: ctx.eventLog ?? (() => {}) });
+        const still = createLiveStillTap({ sn: source.id, dir: eventImageDir, log: ctx.eventLog ?? (() => {}) });
         feed.on("data", still.onChunk);
         let cleanedUp = false;
         const cleanup = () => {
