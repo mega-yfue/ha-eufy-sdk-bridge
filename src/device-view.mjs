@@ -1,5 +1,6 @@
 import { unobservableMembers } from "@mega-yfue/eufy-sdk";
 import { onBatteryPower } from "./power.mjs";
+import { cameraViews, cameraView } from "./camera-views.mjs";
 // The host-facing view of a device: identity + capabilities + live property values + a stream path for
 // cameras. This is the shape the WS `devices.list` / `device.state` / `device.properties` commands and
 // the go2rtc camera registration both read, so a camera is "a device describeDevice gave a `stream`",
@@ -22,6 +23,7 @@ export function createDeviceView(ctx) {
     const dev = await eufy.getDevice(sn);
     const m = dev.describe();
     const isCamera = m.capabilities.includes("camera") || m.capabilities.includes("video");
+    const station = stationOf(dev, m.sn); // {} | { stationSn }
     return {
       sn: m.sn,
       name: m.name, // owner's device name (e.g. "Dining room"), from device_name
@@ -31,14 +33,28 @@ export function createDeviceView(ctx) {
       capabilities: m.capabilities,
       state: propertyState(dev), // live property values ({ battery: 74, motion: false, … })
       ...decodedReadings(dev, m),
-      ...liveness(m.sn), // availability facts a host turns into an online/offline verdict
+      ...liveness(m.sn, station.stationSn), // availability facts a host turns into an online/offline verdict
+      ...station, // the station it hangs off: its own serial when standalone
       stream: isCamera ? `/stream/${m.sn}` : undefined,
+      views: isCamera ? cameraViews(dev.camera?.()).map((view) => cameraView(m.sn, view)) : undefined,
       streaming: isCamera ? streaming.has(m.sn) : undefined, // live P2P feed active right now?
       // "battery" | "wired", decided the way the SDK decides it (power.mjs): the `battery` capability alone
       // also marks mains-only models.
       power: isCamera ? (onBatteryPower(m.model, m.capabilities) ? "battery" : "wired") : undefined,
       canReboot: m.codec === "station", // HomeBase-only; drives a Reboot button in HA
     };
+  }
+
+  /**
+   * The station a device hangs off, as `{ stationSn }`: a HomeBase's serial for a camera or sensor attached
+   * to it, the device's own serial for a standalone device or a station. Read from the SDK's device model,
+   * else from its `deviceState`; omitted when neither names one. A host needs it to tell a HomeBase-attached
+   * device, whose transport is its station's and whose `lastSeenMs` moves only when it reports an event,
+   * from a standalone one.
+   */
+  function stationOf(dev, sn) {
+    const stationSn = dev.stationSn ?? eufy.deviceState?.(sn)?.stationSn;
+    return typeof stationSn === "string" && stationSn ? { stationSn } : {};
   }
 
   /** Live property values as a flat `{ name: value }` map (reading schedules a background refresh). */
@@ -55,17 +71,24 @@ export function createDeviceView(ctx) {
    * reported to the cloud. Both are omitted when the SDK has nothing — an older SDK, or a device that
    * has never emitted the signal — so a host that relies on `state.deviceStatus` is unaffected.
    */
-  function liveness(sn) {
+  function liveness(sn, stationSn) {
     const out = {};
     const lastSeenMs = eufy.deviceState?.(sn)?.lastSeenMs;
     if (typeof lastSeenMs === "number") out.lastSeenMs = lastSeenMs;
     const availability = eufy.deviceAvailability?.(sn)?.availability;
     if (availability === "available" || availability === "unavailable") out.availability = availability;
-    // A P2P session keyed by the device's OWN serial means a STANDALONE device with a live transport —
-    // proof it is reachable right now, even while it only sends transport keepalives and no param frames
-    // (so `lastSeenMs` stays put). A HomeBase-attached device's session is keyed by the HomeBase, not by
-    // the device, so this never fires for a child camera — a parent being up does not prove the child is.
-    if (eufy.getP2pSessions?.().get(sn)?.isConnected === true) out.p2pReachable = true;
+    // A connected P2P session proves a live transport right now — even while the device only sends
+    // keepalives/events and no param frames (so `lastSeenMs` stays put). STANDALONE: the session is keyed
+    // by the device's OWN serial. HOMEBASE-ATTACHED: the session is keyed by the STATION, and a connected
+    // station IS the child's transport — the bridge streams and commands the child through it — so count
+    // the station's live session as the child's reachability. Without this, an attached camera that only
+    // ever reports events (never param frames) looks stale and falsely reads offline while its HomeBase is
+    // up. If the station's session drops, `p2pReachable` is omitted and staleness decides, as before.
+    const sessions = eufy.getP2pSessions?.();
+    const reachable =
+      sessions?.get(sn)?.isConnected === true ||
+      (typeof stationSn === "string" && stationSn !== sn && sessions?.get(stationSn)?.isConnected === true);
+    if (reachable) out.p2pReachable = true;
     return out;
   }
 
