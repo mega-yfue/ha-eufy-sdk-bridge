@@ -38,7 +38,10 @@ export async function writeGo2rtcConfig(cfg, devices) {
     // These indoor models supply raw H.264; probing can mistake it for MPEG audio/TS.
     // Use a named template: inline {input} is interpreted as a go2rtc source replacement.
     const input = ["T8400", "T8410"].includes(d.model) ? "#input=eufy_h264" : "";
-    for (const view of d.views ?? [{ id: d.sn, stream: d.stream }]) {
+    for (const view of (d.views ?? [{ id: d.sn, stream: d.stream }]).flatMap((view) => [
+      view,
+      ...(view.outputs ?? []),
+    ])) {
       lines.push(`  ${view.id}: ffmpeg:http://${cfg.selfHost}:${cfg.port}${view.stream}#video=copy#async${input}`);
     }
   }

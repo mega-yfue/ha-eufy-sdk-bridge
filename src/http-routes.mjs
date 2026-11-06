@@ -12,7 +12,7 @@ import { PLACEHOLDER_CODEC, PLACEHOLDER_KEYFRAME } from "./stream-placeholder.mj
 import { onBatteryPower } from "./power.mjs";
 import { storedThumbnailSeenAt } from "./stored-thumbnail.mjs";
 import { redactSecrets } from "./redact.mjs";
-import { cameraViews, cameraView, requestedView } from "./camera-views.mjs";
+import { cameraViews, cameraView, requestedView, requestedOutputResolution } from "./camera-views.mjs";
 
 function json(res, code, body) {
   const s = redactSecrets(JSON.stringify(body));
@@ -197,14 +197,16 @@ export function createHttpHandler(ctx) {
     if (!flags.ready) return json(res, 503, { error: "not authenticated", auth: ctx.authStatus() });
 
     let view = 0;
+    let outputResolution;
     if ((kind === "stream" || kind === "snapshot") && sn) {
       try {
         view = requestedView(url.searchParams);
+        outputResolution = requestedOutputResolution(url.searchParams);
       } catch (e) {
         return json(res, 400, { error: e.message });
       }
     }
-    const source = cameraView(sn, view);
+    const source = cameraView(sn, view, outputResolution);
 
     // A current still: a fresh live burst, falling back to the retained push thumbnail, and finally to
     // the copy /event-image persisted on disk. That last step matters on accounts whose pushes carry no
@@ -224,6 +226,14 @@ export function createHttpHandler(ctx) {
       // watched (live-still.mjs). Either may be the more recent one, so serve whichever is newer.
       const candidates = [
         { file: path.join(eventImageDir, `last-live-${source.id}.jpg`), label: "last live picture" },
+        ...(outputResolution
+          ? [
+              {
+                file: path.join(eventImageDir, `last-live-${cameraView(sn, view).id}.jpg`),
+                label: "same optic's default-output picture",
+              },
+            ]
+          : []),
         ...(view === 0
           ? [{ file: path.join(eventImageDir, `last-event-${sn}.jpg`), label: "last event thumbnail" }]
           : []),
@@ -255,6 +265,8 @@ export function createHttpHandler(ctx) {
         const cam = device.camera?.();
         if (!cam) return json(res, 404, { error: "no camera on this device" });
         if (!cameraViews(cam).includes(view)) return json(res, 404, { error: "unsupported camera view", view });
+        if (outputResolution && !cam?.outputResolutions?.().includes(outputResolution))
+          return json(res, 404, { error: "unsupported output resolution" });
         // A battery camera pays a radio wake for every still; a mains one does not. Same test the idle
         // watcher uses (see power.mjs), so "which cameras are expensive" is decided in one way.
         const desc = device.describe?.();
@@ -287,7 +299,9 @@ export function createHttpHandler(ctx) {
         let jpeg;
         if (wantLive) {
           try {
-            ({ jpeg } = await cam.snapshotLive(view === 0 ? undefined : { view }));
+            ({ jpeg } = await cam.snapshotLive(
+              view === 0 && !outputResolution ? undefined : { view, ...(outputResolution ? { outputResolution } : {}) },
+            ));
             if (!jpeg) {
               if (snapshotMode === "live") why = "live burst produced no usable image";
               else if (snapshotMode === "auto") why = "mode=auto live burst produced no usable image";
@@ -423,7 +437,7 @@ export function createHttpHandler(ctx) {
       // where live keyframes are kept — an H.265 camera recovers from the H.264 stand-in through that file.
       // Only the primary view: whether a secondary one exists is known once the camera answers, and that
       // answer must stay a 404 rather than a primed response.
-      const instant = cfg.streamInstantStart && view === 0;
+      const instant = cfg.streamInstantStart && view === 0 && !outputResolution;
       let primer = instant ? await loadPrimer(eventImageDir, sn) : null;
       if (!primer && instant && cfg.streamPlaceholder && eventImageDir)
         primer = { au: PLACEHOLDER_KEYFRAME, codec: PLACEHOLDER_CODEC, placeholder: true };
@@ -476,11 +490,17 @@ export function createHttpHandler(ctx) {
           );
           if (!openFeed) return fail(404, { error: "no live video on this device" });
           if (!cameraViews(cam).includes(view)) return fail(404, { error: "unsupported camera view", view });
+          if (outputResolution && !cam?.outputResolutions?.().includes(outputResolution))
+            return fail(404, { error: "unsupported output resolution" });
           if (gone) return stopPrimer?.(); // don't wake the camera for a viewer that already left
           // The battery budget only takes effect when this call opens the session, which it does: the stream
           // client is dedicated to /stream (stills go through the control client), so nothing opens it first.
           const budget = cfg.streamBatteryBudgetMs;
-          const opts = { ...(budget ? { batteryBudgetMs: budget } : {}), ...(view === 0 ? {} : { view }) };
+          const opts = {
+            ...(budget ? { batteryBudgetMs: budget } : {}),
+            ...(view === 0 ? {} : { view }),
+            ...(outputResolution ? { outputResolution } : {}),
+          };
           feed = await openFeed(Object.keys(opts).length ? opts : undefined); // Annex-B
           // An open feed is not a live one yet: on a reused session whose camera went back to sleep, the start
           // command can go unanswered for 20 s and then fail. Keep the primer going until the first live bytes,
