@@ -5,8 +5,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { streamClientFor, dropStreamClient, isSupersededStreamClient } from "../streams.mjs";
-import { createLiveStillTap } from "./live-still.mjs";
+import { createLiveStillTap, keyframeCodec, lastLiveKeyframeFile } from "./live-still.mjs";
 import { liveFeedOpener } from "./live-feed.mjs";
+import { loadPrimer, startPrimer } from "./stream-primer.mjs";
+import { PLACEHOLDER_CODEC, PLACEHOLDER_KEYFRAME } from "./stream-placeholder.mjs";
 import { onBatteryPower } from "./power.mjs";
 import { storedThumbnailSeenAt } from "./stored-thumbnail.mjs";
 import { redactSecrets } from "./redact.mjs";
@@ -21,6 +23,43 @@ function json(res, code, body) {
 // Throttle the go2rtc consumer probe per device (a stream can be re-requested on a tight retry loop).
 // `0` disables the probe; the immediate-requester line still logs on every request.
 const STREAM_CONSUMER_LOG_MS = Number(process.env.BRIDGE_STREAM_CONSUMER_LOG_MS ?? 15000);
+
+/** True for the SDK's "the station's P2P session never connected" (StationUnreachableError / session timeout). */
+function isUnreachable(e) {
+  return (
+    e?.name === "StationUnreachableError" || /did not connect within|P2P connect timeout/.test(String(e?.message ?? e))
+  );
+}
+
+/**
+ * The feed's first chunk, with the feed paused so pipe() picks up from the next one. Resolves null when the
+ * viewer (`res`) leaves first; rejects when the feed fails or ends before sending anything.
+ */
+function firstChunk(feed, res) {
+  return new Promise((resolve, reject) => {
+    const settle = (fn, value) => {
+      feed.off("data", onData);
+      feed.off("error", onError);
+      feed.off("end", onEnd);
+      feed.off("close", onEnd);
+      res.off("close", onLeft);
+      fn(value);
+    };
+    const onData = (chunk) => {
+      feed.pause();
+      settle(resolve, chunk);
+    };
+    const onError = (e) => settle(reject, e);
+    const onEnd = () => settle(reject, new Error("the live feed ended before its first frame"));
+    const onLeft = () => settle(resolve, null);
+    feed.on("error", onError);
+    feed.on("end", onEnd);
+    feed.on("close", onEnd);
+    res.on("close", onLeft);
+    if (res.destroyed) return onLeft(); // left while the feed was opening
+    feed.on("data", onData);
+  });
+}
 
 export function createHttpHandler(ctx) {
   const { cfg, eufy, SCHEMA_VERSION, eventImageDir } = ctx;
@@ -81,6 +120,46 @@ export function createHttpHandler(ctx) {
     } catch {
       /* go2rtc API unreachable — the immediate-requester line is the fallback */
     }
+  }
+
+  // How many consumers go2rtc lists for a stream, or null when go2rtc cannot be asked (disabled, not ready).
+  async function go2rtcConsumerCount(sn) {
+    if (ctx.go2rtcConsumerCount) return ctx.go2rtcConsumerCount(sn); // tests
+    try {
+      const r = await fetch(`http://127.0.0.1:${go2rtcApiPort}/api/streams?src=${encodeURIComponent(sn)}`, {
+        signal: AbortSignal.timeout(3000),
+      });
+      if (!r.ok) return null;
+      const data = await r.json();
+      return (data?.consumers ?? data?.[sn]?.consumers ?? []).filter(Boolean).length;
+    } catch {
+      return null;
+    }
+  }
+
+  // A battery camera's stream reached its budget (see live-feed.mjs): keep it going while someone still
+  // watches, up to STREAM_BATTERY_MAX_MS. Not extending lets the SDK stop the stream after its grace.
+  async function onStreamBudget(sn, notice, res) {
+    if (res.destroyed) return; // this viewer left; another request on the same camera may still extend
+    const starts = [...(openFeeds.get(sn) ?? [])].map((e) => e.startedAt);
+    const streamedMs = starts.length ? Date.now() - Math.min(...starts) : 0;
+    const secs = (ms) => `${Math.round(ms / 1000)}s`;
+    if (cfg.streamBatteryMaxMs > 0 && streamedMs >= cfg.streamBatteryMaxMs) {
+      ctx.eventLog?.(
+        `/stream ${sn} → battery budget not extended: streaming for ${secs(streamedMs)}, the cap is ${secs(cfg.streamBatteryMaxMs)} (STREAM_BATTERY_MAX_MS)`,
+      );
+      return;
+    }
+    const consumers = await go2rtcConsumerCount(sn);
+    if (consumers === 0) {
+      ctx.eventLog?.(`/stream ${sn} → battery budget not extended: go2rtc lists no viewer`);
+      return;
+    }
+    if (res.destroyed) return;
+    notice.extend(cfg.streamBatteryBudgetMs); // undefined → another full SDK budget
+    ctx.eventLog?.(
+      `/stream ${sn} → battery budget extended (${consumers == null ? "viewer unknown — go2rtc not asked" : `${consumers} viewer(s)`}, streaming for ${secs(streamedMs)})`,
+    );
   }
 
   // Log every /stream request's IMMEDIATE requester (IP + UA). Normally that's go2rtc's own ffmpeg on
@@ -368,100 +447,184 @@ export function createHttpHandler(ctx) {
       let gone = false;
       const onGone = () => (gone = true);
       res.once("close", onGone);
-      let lease;
-      try {
-        lease = openStreamClient(sn, cfg); // its OWN P2P session — see streams.mjs
-        const client = await lease;
-        const dev = await client.getDevice(sn);
-        const cam = dev.camera?.();
-        const openFeed = liveFeedOpener(cam);
-        if (!openFeed) {
-          res.off("close", onGone);
-          return json(res, 404, { error: "no live video on this device" });
-        }
-        if (!cameraViews(cam).includes(view)) {
-          res.off("close", onGone);
-          return json(res, 404, { error: "unsupported camera view", view });
-        }
-        if (gone) return; // don't wake the camera for a viewer that already left
-        // The battery budget only takes effect when this call opens the session, which it does: the stream
-        // client is dedicated to /stream (stills go through the control client), so nothing opens it first.
-        const budget = cfg.streamBatteryBudgetMs;
-        const opts = { ...(budget ? { batteryBudgetMs: budget } : {}), ...(view === 0 ? {} : { view }) };
-        const feed = await openFeed(Object.keys(opts).length ? opts : undefined); // Annex-B
-        res.off("close", onGone);
-        ctx.noteStreamOpened?.(sn); // reachable again → clear any failure backoff
-        if (gone) {
-          feed.destroy(); // detaches from the shared live source, so it can stop
-          return;
-        }
-        let feeds = openFeeds.get(sn);
-        if (!feeds) openFeeds.set(sn, (feeds = new Set()));
-        // `peers` lets the idle sweep close every open request for this camera, not only this one.
-        // `battery` decides whether the idle sweep may auto-off this feed: a mains camera costs nothing to
-        // keep streaming, so a continuous consumer (an NVR, say) must not lose it. Unknown → battery.
-        const desc = dev.describe?.();
-        const battery = desc ? onBatteryPower(desc.model, desc.capabilities) : true;
-        const entry = { feed, startedAt: Date.now(), lease, peers: feeds, battery };
-        feeds.add(entry);
-        if (!streaming.has(sn)) ctx.broadcast({ event: "streamState", deviceSn: sn, active: true });
-        streaming.add(sn);
-        activeStreams.set(sn, entry);
-        rtspLastActive.set(sn, Date.now()); // a live stream counts as activity for the rtspStream auto-off
+      // Instant start: answer now with the last live keyframe, repeated until the live feed takes over, so
+      // the consumer's RTSP DESCRIBE does not time out while the camera wakes (see stream-primer.mjs).
+      // A camera never watched here has no kept keyframe: it starts with the stand-in picture instead. Only
+      // where live keyframes are kept — an H.265 camera recovers from the H.264 stand-in through that file.
+      // Only the primary view: whether a secondary one exists is known once the camera answers, and that
+      // answer must stay a 404 rather than a primed response.
+      const instant = cfg.streamInstantStart && view === 0;
+      let primer = instant ? await loadPrimer(eventImageDir, sn) : null;
+      if (!primer && instant && cfg.streamPlaceholder && eventImageDir)
+        primer = { au: PLACEHOLDER_KEYFRAME, codec: PLACEHOLDER_CODEC, placeholder: true };
+      let stopPrimer;
+      if (primer && !gone) {
         res.writeHead(200, { "content-type": "application/octet-stream", "cache-control": "no-cache" });
-        feed.pipe(res);
-        // Remember the stream's latest keyframe so the still can show what was last SEEN, not only the
-        // last event — without ever waking the camera for it (see live-still.mjs).
-        const still = createLiveStillTap({
-          sn: source.id,
-          dir: eventImageDir,
-          log: ctx.eventLog ?? (() => {}),
-          onSaved: view === 0 ? () => ctx.broadcast?.({ event: "lastScreenUpdated", deviceSn: sn }) : undefined,
-        });
-        feed.on("data", still.onChunk);
-        let cleanedUp = false;
-        const cleanup = () => {
-          if (cleanedUp) return;
-          cleanedUp = true;
-          void still.flush();
-          feed.destroy();
-          // pipe() ends the response only on a clean end. A feed that failed (P2P drop, warm-up timeout) or
-          // closed early would leave ffmpeg on an open, silent socket until its own timeout — abort the
-          // response instead, so go2rtc reconnects right away.
-          if (!feed.readableEnded) res.destroy();
-          feeds.delete(entry);
-          if (dropWhenIdle.has(lease) && ![...feeds].some((other) => other.lease === lease)) {
-            dropWhenIdle.delete(lease);
-            dropClient(sn, lease); // the open that failed on this client earlier — now nobody uses it
-          }
-          if (activeStreams.get(sn) === entry) {
-            const other = feeds.values().next().value; // an overlapping request still streaming this camera
-            if (other) activeStreams.set(sn, other);
-            else activeStreams.delete(sn);
-          }
-          if (feeds.size) return;
-          openFeeds.delete(sn);
-          if (streaming.delete(sn)) ctx.broadcast({ event: "streamState", deviceSn: sn, active: false });
-        };
-        req.on("close", cleanup);
-        feed.on("error", cleanup);
-        feed.on("close", cleanup);
-        return;
-      } catch (e) {
+        stopPrimer = startPrimer(res, primer.au, { intervalMs: cfg.streamPrimerMs });
+        ctx.eventLog?.(
+          `/stream ${sn} → answered at once with ${primer.placeholder ? "a stand-in picture (no live picture kept yet)" : "the last live picture"} (${primer.au.length}B, ${primer.codec}) while the camera wakes`,
+        );
+      }
+      // An answer once the stream is primed can no longer be a status code: end the response instead, so
+      // ffmpeg sees the stream end and go2rtc reconnects.
+      const fail = (code, body) => {
+        stopPrimer?.();
         res.off("close", onGone);
-        // Our client was dropped (or the bridge is shutting down) before its login finished: nothing was
-        // opened and the camera did not fail, so neither arm the backoff nor drop the client that replaced it.
-        if (isSupersededStreamClient(e)) return json(res, 503, { error: String(e?.message ?? e) });
-        // Arm backoff so the next go2rtc retry doesn't wake the radio again — once per lease.
-        if (!lease || !failedLeases.has(lease)) {
-          if (lease) failedLeases.add(lease);
-          ctx.noteStreamFailure?.(sn, String(e?.message ?? e));
-        }
-        // Never reuse a session that just failed (see dropStreamClient in streams.mjs) — but don't pull it
-        // from under another request still streaming on it; drop it when that one ends.
+        if (res.headersSent) res.destroy();
+        else json(res, code, body);
+      };
+      // Never reuse a session that just failed (see dropStreamClient in streams.mjs) — but don't pull it
+      // from under another request still streaming on it; drop it when that one ends.
+      const dropFailed = (lease) => {
         if (lease && [...(openFeeds.get(sn) ?? [])].some((other) => other.lease === lease)) dropWhenIdle.add(lease);
         else dropClient(sn, lease);
-        return json(res, 502, { error: String(e?.message ?? e) });
+      };
+      const attempts = Math.max(1, cfg.streamOpenAttempts ?? 1);
+      // A primed request keeps its consumer fed, so it can afford to wait for a camera that takes a minute
+      // to wake (4G): it keeps retrying until the open budget is spent, not only `attempts` times. Giving up
+      // earlier would arm the failure backoff and refuse the consumer's reconnects while the camera is up.
+      const openStartedAt = Date.now();
+      const openUntil = openStartedAt + (cfg.streamOpenBudgetMs ?? 0);
+      const mayRetry = (attempt) => attempt < attempts || (stopPrimer && Date.now() < openUntil);
+      for (let attempt = 1; ; attempt++) {
+        let lease;
+        let feed;
+        const attemptStartedAt = Date.now();
+        try {
+          lease = openStreamClient(sn, cfg); // its OWN P2P session — see streams.mjs
+          const client = await lease;
+          const dev = await client.getDevice(sn);
+          // `battery` decides whether the idle sweep may auto-off this feed: a mains camera costs nothing to
+          // keep streaming, so a continuous consumer (an NVR, say) must not lose it. Unknown → battery.
+          // Only a battery stream has a budget to extend, so only it asks to hear about one.
+          const desc = dev.describe?.();
+          const battery = desc ? onBatteryPower(desc.model, desc.capabilities) : true;
+          const cam = dev.camera?.();
+          const openFeed = liveFeedOpener(
+            cam,
+            battery ? { onBudget: (notice) => void onStreamBudget(sn, notice, res) } : undefined,
+          );
+          if (!openFeed) return fail(404, { error: "no live video on this device" });
+          if (!cameraViews(cam).includes(view)) return fail(404, { error: "unsupported camera view", view });
+          if (gone) return stopPrimer?.(); // don't wake the camera for a viewer that already left
+          // The battery budget only takes effect when this call opens the session, which it does: the stream
+          // client is dedicated to /stream (stills go through the control client), so nothing opens it first.
+          const budget = cfg.streamBatteryBudgetMs;
+          const opts = { ...(budget ? { batteryBudgetMs: budget } : {}), ...(view === 0 ? {} : { view }) };
+          feed = await openFeed(Object.keys(opts).length ? opts : undefined); // Annex-B
+          // An open feed is not a live one yet: on a reused session whose camera went back to sleep, the start
+          // command can go unanswered for 20 s and then fail. Keep the primer going until the first live bytes,
+          // and treat a feed that dies before them like a failed open (retried below).
+          const first = await firstChunk(feed, res);
+          stopPrimer?.();
+          res.off("close", onGone);
+          if (gone || !first) {
+            feed.destroy(); // detaches from the shared live source, so it can stop
+            return;
+          }
+          // The stand-in picture is H.264, and the consumer's ffmpeg fixed its codec on it: an H.265 camera
+          // cannot follow in this response. Keep its keyframe and end the response; go2rtc reconnects at once,
+          // is primed with the right codec, and joins the still-warm stream (the source lingers a few seconds).
+          const liveCodec = keyframeCodec(first);
+          if (primer?.placeholder && liveCodec && liveCodec !== PLACEHOLDER_CODEC) {
+            if (eventImageDir)
+              await fs.promises.writeFile(lastLiveKeyframeFile(eventImageDir, source.id), first).catch(() => {});
+            ctx.eventLog?.(
+              `/stream ${sn} → live video is ${liveCodec}, not the stand-in's ${PLACEHOLDER_CODEC} — reconnecting with it`,
+            );
+            feed.destroy();
+            res.destroy();
+            return;
+          }
+          ctx.noteStreamOpened?.(sn); // reachable again → clear any failure backoff
+          let feeds = openFeeds.get(sn);
+          if (!feeds) openFeeds.set(sn, (feeds = new Set()));
+          // `peers` lets the idle sweep close every open request for this camera, not only this one.
+          const entry = { feed, startedAt: Date.now(), lease, peers: feeds, battery };
+          feeds.add(entry);
+          if (!streaming.has(sn)) ctx.broadcast({ event: "streamState", deviceSn: sn, active: true });
+          streaming.add(sn);
+          activeStreams.set(sn, entry);
+          rtspLastActive.set(sn, Date.now()); // a live stream counts as activity for the rtspStream auto-off
+          if (!res.headersSent)
+            res.writeHead(200, { "content-type": "application/octet-stream", "cache-control": "no-cache" });
+          res.write(first);
+          feed.pipe(res);
+          // Remember the stream's latest keyframe so the still can show what was last SEEN, not only the
+          // last event — without ever waking the camera for it (see live-still.mjs).
+          const still = createLiveStillTap({
+            sn: source.id,
+            dir: eventImageDir,
+            log: ctx.eventLog ?? (() => {}),
+            onSaved: view === 0 ? () => ctx.broadcast?.({ event: "lastScreenUpdated", deviceSn: sn }) : undefined,
+          });
+          still.onChunk(first);
+          feed.on("data", still.onChunk);
+          let cleanedUp = false;
+          const cleanup = () => {
+            if (cleanedUp) return;
+            cleanedUp = true;
+            void still.flush();
+            feed.destroy();
+            // pipe() ends the response only on a clean end. A feed that failed (P2P drop, warm-up timeout) or
+            // closed early would leave ffmpeg on an open, silent socket until its own timeout — abort the
+            // response instead, so go2rtc reconnects right away.
+            if (!feed.readableEnded) res.destroy();
+            feeds.delete(entry);
+            if (dropWhenIdle.has(lease) && ![...feeds].some((other) => other.lease === lease)) {
+              dropWhenIdle.delete(lease);
+              dropClient(sn, lease); // the open that failed on this client earlier — now nobody uses it
+            }
+            if (activeStreams.get(sn) === entry) {
+              const other = feeds.values().next().value; // an overlapping request still streaming this camera
+              if (other) activeStreams.set(sn, other);
+              else activeStreams.delete(sn);
+            }
+            if (feeds.size) return;
+            openFeeds.delete(sn);
+            if (streaming.delete(sn)) ctx.broadcast({ event: "streamState", deviceSn: sn, active: false });
+          };
+          req.on("close", cleanup);
+          feed.on("error", cleanup);
+          feed.on("close", cleanup);
+          return;
+        } catch (e) {
+          feed?.destroy();
+          // Our client was dropped (or the bridge is shutting down) before its login finished: nothing was
+          // opened and the camera did not fail, so neither arm the backoff nor drop the client that replaced it.
+          if (isSupersededStreamClient(e)) return fail(503, { error: String(e?.message ?? e) });
+          const reason = String(e?.message ?? e);
+          // A failed attempt has usually woken a sleeping camera (it answers the cloud lookup only once it is
+          // up), so try again at once — on a fresh session — before failing the request.
+          // A session the camera has not answered yet. On 4G that is the normal wake: the camera is up after a
+          // few seconds, but the cloud goes on handing out its address from before it slept for another ~30 s,
+          // and the SDK gives each session 15 s to connect. It is waiting, not failing: say so, and start the
+          // next session right away (this one has already closed itself).
+          const waking = stopPrimer && isUnreachable(e);
+          if (mayRetry(attempt) && !gone) {
+            const of = attempt < attempts ? `${attempt}/${attempts}` : `${attempt}, primed`;
+            if (waking) {
+              const secs = Math.round((Date.now() - openStartedAt) / 1000);
+              ctx.eventLog?.(
+                `/stream ${sn} → camera not reachable yet after ${secs}s (attempt ${of}) — still waiting for it`,
+              );
+            } else ctx.eventLog?.(`/stream ${sn} → open attempt ${of} failed (${reason}) — trying again`);
+            dropFailed(lease);
+            // Past the attempts, pause between tries: a failure that comes back at once (cloud error) would
+            // otherwise spin for the whole budget. One that took longer (a session that waited its 15 s) has
+            // paused already.
+            const rest = (cfg.streamOpenRetryPauseMs ?? 1000) - (Date.now() - attemptStartedAt);
+            if (attempt >= attempts && rest > 0) await new Promise((r) => setTimeout(r, rest));
+            continue;
+          }
+          // Arm backoff so the next go2rtc retry doesn't wake the radio again — once per lease.
+          if (!lease || !failedLeases.has(lease)) {
+            if (lease) failedLeases.add(lease);
+            ctx.noteStreamFailure?.(sn, reason);
+          }
+          dropFailed(lease);
+          return fail(502, { error: reason });
+        }
       }
     }
 

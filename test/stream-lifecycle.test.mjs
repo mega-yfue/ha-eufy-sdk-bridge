@@ -12,6 +12,8 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import { PassThrough } from "node:stream";
 
+const KEY = Buffer.from([0, 0, 0, 1, 0x65, 0x88]);
+
 import { loadConfig } from "../src/config.mjs";
 import { createState } from "../src/state.mjs";
 import { createStreamIdle } from "../src/stream-idle.mjs";
@@ -62,6 +64,7 @@ async function setup() {
             if (t.gate) await t.gate;
             if (t.openError) throw t.openError;
             const feed = new PassThrough();
+            feed.write(KEY); // a real feed counts as live only once its first bytes arrive
             t.feeds.push(feed);
             return feed;
           },
@@ -133,7 +136,7 @@ test("a clean end of the feed ends the response with every byte (control case)",
     const out = await settled(p);
     assert.equal(out.status, 200);
     assert.equal(out.ended, true);
-    assert.equal(out.bytes, 1500);
+    assert.equal(out.bytes, KEY.length + 1500);
     await until(() => !t.state.streaming.has("CAM1"), "streaming cleared");
     assert.equal(t.state.activeStreams.has("CAM1"), false);
   } finally {
@@ -151,7 +154,7 @@ test("raw HEVC Annex-B bytes reach the HTTP consumer with a codec-neutral conten
     const out = await settled(p);
     assert.equal(out.status, 200);
     assert.equal(out.contentType, "application/octet-stream");
-    assert.deepEqual(Buffer.concat(out.chunks), hevc);
+    assert.deepEqual(Buffer.concat(out.chunks), Buffer.concat([KEY, hevc]));
     assert.equal(out.ended, true);
   } finally {
     await t.close();
@@ -168,7 +171,7 @@ test("raw H.264 Annex-B bytes also reach the HTTP consumer unchanged", async () 
     const out = await settled(p);
     assert.equal(out.status, 200);
     assert.equal(out.contentType, "application/octet-stream");
-    assert.deepEqual(Buffer.concat(out.chunks), h264);
+    assert.deepEqual(Buffer.concat(out.chunks), Buffer.concat([KEY, h264]));
     assert.equal(out.ended, true);
   } finally {
     await t.close();
@@ -181,7 +184,7 @@ test("a feed that fails mid-stream aborts the response instead of leaving it ope
     const p = pull(t);
     await until(() => t.feeds.length === 1, "feed opened");
     t.feeds[0].write(Buffer.alloc(1000));
-    await until(() => p.bytes === 1000, "first bytes delivered");
+    await until(() => p.bytes === KEY.length + 1000, "first bytes delivered");
     t.feeds[0].destroy(new Error("P2P session lost"));
     const out = await settled(p);
     assert.notEqual(out.timedOut, true, "response left open on a silent socket");
@@ -201,7 +204,7 @@ test("a feed that closes before its end aborts the response too", async () => {
     const p = pull(t);
     await until(() => t.feeds.length === 1, "feed opened");
     t.feeds[0].write(Buffer.alloc(100));
-    await until(() => p.bytes === 100, "first bytes delivered");
+    await until(() => p.bytes === KEY.length + 100, "first bytes delivered");
     t.feeds[0].destroy(); // no error, no end — e.g. the consumer was detached underneath us
     const out = await settled(p);
     assert.notEqual(out.timedOut, true, "response left open on a silent socket");

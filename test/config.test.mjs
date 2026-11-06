@@ -74,3 +74,11 @@ test("openudid is undefined by default and taken from BRIDGE_OPENUDID when set",
   assert.equal(loadConfig({ ...base, BRIDGE_OPENUDID: "abcd1234abcd1234" }).cfg.openudid, "abcd1234abcd1234");
   assert.equal(loadConfig({ ...base, BRIDGE_OPENUDID: "" }).cfg.openudid, undefined); // empty → default
 });
+
+test("STREAM_BATTERY_MAX_MS: a malformed value keeps the safety cap, 0 removes it", () => {
+  assert.equal(loadConfig(base).cfg.streamBatteryMaxMs, 600_000);
+  assert.equal(loadConfig({ ...base, STREAM_BATTERY_MAX_MS: "120000" }).cfg.streamBatteryMaxMs, 120_000);
+  assert.equal(loadConfig({ ...base, STREAM_BATTERY_MAX_MS: "0" }).cfg.streamBatteryMaxMs, 0);
+  assert.equal(loadConfig({ ...base, STREAM_BATTERY_MAX_MS: "ten minutes" }).cfg.streamBatteryMaxMs, 600_000);
+  assert.equal(loadConfig({ ...base, STREAM_BATTERY_MAX_MS: "-1" }).cfg.streamBatteryMaxMs, 600_000);
+});

@@ -25,9 +25,19 @@ one-click fix, when a battery camera has it on.
 ## A watched battery-camera stream drops about every minute
 
 The SDK limits how long a battery camera may stream continuously (45 s plus a 10 s grace by
-default), so an open stream ends roughly every 55 s and the reconnect wakes the camera again. To
-keep it up longer, raise `stream_battery_budget_ms` / `STREAM_BATTERY_BUDGET_MS` (for example
-`180000`). Mains cameras aren't affected.
+default). Older bridges could not extend that limit through `/stream`, so an open stream ended
+roughly every 55 s: the picture froze, the camera's _streaming_ sensor went off, and only reopening
+the view brought it back. Now the bridge extends the limit while go2rtc still lists a
+viewer, up to `stream_battery_max_ms` / `STREAM_BATTERY_MAX_MS` (10 min by default). The log shows
+`battery budget extended` each time. Mains cameras aren't affected.
+
+## The first live view of a 4G camera takes half a minute
+
+A battery camera on a mobile connection wakes within a few seconds, but the cloud goes on handing
+out the address it had before it slept for another ~30 s, and no P2P connection can be made to
+that address. The log shows `camera not reachable yet after …s — still waiting for it` meanwhile;
+the viewer sees the last live picture (or a stand-in) until the camera answers. This wait is on the
+camera's and the carrier's side.
 
 ## A mains camera's stream stops after about 5 minutes
 
