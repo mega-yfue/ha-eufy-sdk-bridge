@@ -119,13 +119,35 @@ export function loadConfig(env = process.env) {
     // stills on a timer (HA re-pulls each camera tile), so the cost is continuous. `1` forces the burst
     // everywhere, `0` never — both remain available for hosts that want the old behaviour.
     snapshotLive: env.SNAPSHOT_LIVE == null || env.SNAPSHOT_LIVE === "auto" ? "auto" : truthy(env.SNAPSHOT_LIVE),
-    // How long a BATTERY camera may stream continuously, handed to the SDK when /stream opens the session.
-    // The SDK bounds a battery stream to a budget (default 45s) plus a 10s grace, then stops it unless the
-    // caller extends it — and a Readable, which is what /stream consumes, has no way to extend. So every
-    // watched battery stream ended after ~55s, and the consumer's reconnect woke the camera again. Unset
-    // keeps the SDK default. Mains cameras ignore it, and closing the last viewer still ends the session
-    // at once. Positive whole ms; anything else → default.
+    // How long a BATTERY camera may stream continuously before the bridge is asked whether it is still
+    // watched, handed to the SDK when /stream opens the session. The SDK bounds a battery stream to a budget
+    // (default 45s) plus a 10s grace, then stops it unless the caller extends it. /stream extends it while
+    // go2rtc still lists a consumer (see live-feed.mjs), and each extension lasts this long again. Unset
+    // keeps the SDK default. Mains cameras ignore it, and closing the last viewer still ends the session at
+    // once. Positive whole ms; anything else → default.
     streamBatteryBudgetMs: positiveInt(env.STREAM_BATTERY_BUDGET_MS),
+    // The cap on those extensions: one battery stream is not kept going past this, watched or not — a
+    // forgotten dashboard or a preloading card would otherwise hold a battery camera awake for good.
+    // Default 10 min; 0 = no cap.
+    streamBatteryMaxMs:
+      env.STREAM_BATTERY_MAX_MS?.trim() === "0" ? 0 : (positiveInt(env.STREAM_BATTERY_MAX_MS) ?? 600_000),
+    // Answer /stream at once with the camera's last live keyframe, repeated every STREAM_PRIMER_MS until the
+    // live feed takes over (see stream-primer.mjs). Without it a sleeping battery camera answers too late for
+    // Home Assistant's go2rtc, which waits a fixed 5 s for the RTSP DESCRIBE reply. Default on; 0 disables.
+    streamInstantStart: env.STREAM_INSTANT_START == null ? true : truthy(env.STREAM_INSTANT_START),
+    streamPrimerMs: positiveInt(env.STREAM_PRIMER_MS) ?? 500,
+    // A camera with no kept keyframe yet (never watched through this bridge) starts with a stand-in picture
+    // instead (stream-placeholder.mjs), so its first live view does not time out either. Default on; 0 = off.
+    streamPlaceholder: env.STREAM_PLACEHOLDER == null ? true : truthy(env.STREAM_PLACEHOLDER),
+    // How many times one /stream request tries to open the camera before it fails. A failed first attempt
+    // has usually woken the camera, so a second one right after connects in a few seconds — instead of the
+    // consumer giving up and the failure backoff refusing its retry. Default 3; 1 = the old behaviour.
+    streamOpenAttempts: positiveInt(env.STREAM_OPEN_ATTEMPTS) ?? 3,
+    // A request already answered with the kept keyframe (instant start) goes on retrying past
+    // STREAM_OPEN_ATTEMPTS until this long after it started: a 4G camera can need over a minute to wake, and
+    // the consumer keeps watching the kept picture meanwhile. Default 90s; 1 = attempts only.
+    streamOpenBudgetMs: positiveInt(env.STREAM_OPEN_BUDGET_MS) ?? 90_000,
+    streamOpenRetryPauseMs: positiveInt(env.STREAM_OPEN_RETRY_PAUSE_MS) ?? 1000, // between budget retries
     // How long after the push /clip waits before downloading a HomeBase 2 recording, so the station has
     // finished writing it. Set it at least to the camera's clip length. Default 30s.
     clipSettleMs: env.CLIP_SETTLE_MS != null ? Number(env.CLIP_SETTLE_MS) : 30_000,
@@ -180,6 +202,8 @@ export function loadConfig(env = process.env) {
 
   const DEBUG = truthy(env.BRIDGE_DEBUG);
   const DEBUG_P2P = truthy(env.BRIDGE_DEBUG_P2P);
+  // Also handed to the per-camera stream clients (streams.mjs), which otherwise log nothing.
+  cfg.debugP2p = DEBUG_P2P;
   const dbg = (...a) => {
     if (DEBUG) console.log("[bridge:dbg]", ...a);
   };

@@ -101,7 +101,7 @@ test("a camera with live() but no openReadable streams instead of answering 404"
   );
   try {
     const pending = get(t.port); // headers flush with the first frame, so don't await before sending one
-    await until(() => t.state.streaming.has("LOCK1"), "the lock to read as streaming");
+    await until(() => consumer.listenerCount("video") > 0, "the feed to open");
     assert.equal(opened[0]?.batteryBudgetMs, 180000); // the budget reaches live() like it reached openReadable()
     consumer.frame("\x00\x00\x00\x01AU1");
     const res = await pending;
@@ -123,7 +123,7 @@ test("a viewer leaving stops the live() consumer", async () => {
   const t = await setup({ live: async () => consumer });
   try {
     const pending = get(t.port);
-    await until(() => t.state.streaming.has("LOCK1"), "the lock to read as streaming");
+    await until(() => consumer.listenerCount("video") > 0, "the feed to open");
     consumer.frame("\x00\x00\x00\x01AU1");
     const res = await pending;
     assert.equal(res.statusCode, 200);
@@ -148,7 +148,6 @@ test("openReadable is still preferred when the SDK offers it", async () => {
   });
   try {
     const pending = get(t.port);
-    await until(() => t.state.streaming.has("LOCK1"), "the lock to read as streaming");
     feed.end(Buffer.from("AU"));
     const res = await pending;
     assert.equal(res.statusCode, 200);

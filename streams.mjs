@@ -11,7 +11,7 @@
 //
 // This is a workaround at the wrong layer; the right fix is session-per-stream INSIDE the SDK, after
 // which this whole file collapses to reusing the one control client.
-import { EufyMega, FileSessionStore, LoginStatus } from "@mega-yfue/eufy-sdk";
+import { EufyMega, FileSessionStore, LoginStatus, ConsoleLogger } from "@mega-yfue/eufy-sdk";
 
 // sn -> entry. An entry wraps one client's login; callers await its `lease`. The lease is cached, not the
 // finished client: two first calls for one camera (e.g. an ffmpeg retry overlapping the first pull while the
@@ -55,6 +55,8 @@ export function streamClientOptions(cfg) {
     store: new FileSessionStore(cfg.session), // shared session file → hydrate, no fresh login
     openudid: cfg.openudid, // same identity as the control client (matches the shared session)
     autoRealtime: false, // NEVER start a second push channel — see above
+    // Under BRIDGE_DEBUG_P2P, like the control client: a /stream open's P2P connect is otherwise invisible.
+    logger: cfg.debugP2p ? new ConsoleLogger() : undefined,
   };
 }
 

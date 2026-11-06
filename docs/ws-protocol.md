@@ -508,6 +508,14 @@ and implements them; registration alone does not establish hardware support for 
 | `GET /stream/<sn>`   | live Annex-B H.264/H.265 (`application/octet-stream`) — what go2rtc pulls. _Requires auth._                 |
 | `GET /clip/<sn>`     | the latest detection's HomeBase 2 recording (`video/mp4`). _Requires auth._                                 |
 
+**A primed `/stream` has no error status.** With `STREAM_INSTANT_START` on (the default) the bridge answers
+`200` at once for the primary view and sends the last live keyframe while the camera wakes. A failure
+after that point (the camera cannot be reached, it has no live video) can no longer be a status code or
+a JSON error: the bridge ends the connection instead, and go2rtc reconnects. A direct `/stream` consumer
+must treat a connection that ends early as that failure. Set `STREAM_INSTANT_START=0` to get the status
+codes back. A failure backoff (`503`), an idle suspension (`503`) and a secondary `?view=` are never primed,
+so they keep their status codes.
+
 The bridge does not infer cloud-poll health from device-event silence; `ok` means the HTTP endpoint answered.
 
 `GET /snapshot/<sn>` uses `SNAPSHOT_LIVE` when no mode is supplied. A request may use `?mode=auto` for

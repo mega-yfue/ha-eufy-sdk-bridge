@@ -14,7 +14,12 @@ const { createHttpHandler } = await import("../src/http-routes.mjs");
 
 /** A handler whose stream client always fails to open, recording the drops the route asks for. */
 function setup() {
-  const config = loadConfig({ EUFY_EMAIL: "x@y.z", EUFY_PASSWORD: "pw" });
+  const config = loadConfig({
+    EUFY_EMAIL: "x@y.z",
+    EUFY_PASSWORD: "pw",
+    STREAM_OPEN_ATTEMPTS: "1",
+    STREAM_PLACEHOLDER: "0",
+  });
   const state = createState();
   state.flags.ready = true;
   const dropped = [];
