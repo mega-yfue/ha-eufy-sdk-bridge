@@ -126,6 +126,9 @@ export function loadConfig(env = process.env) {
     // keeps the SDK default. Mains cameras ignore it, and closing the last viewer still ends the session
     // at once. Positive whole ms; anything else → default.
     streamBatteryBudgetMs: positiveInt(env.STREAM_BATTERY_BUDGET_MS),
+    // Experimental: hole-punch ±N ports for cameras behind a mobile carrier's NAT (the SDK alone covers ±3).
+    // Positive whole number; anything else → off.
+    p2pPunchSpread: positiveInt(env.P2P_PUNCH_SPREAD),
     // How long after the push /clip waits before downloading a HomeBase 2 recording, so the station has
     // finished writing it. Set it at least to the camera's clip length. Default 30s.
     clipSettleMs: env.CLIP_SETTLE_MS != null ? Number(env.CLIP_SETTLE_MS) : 30_000,

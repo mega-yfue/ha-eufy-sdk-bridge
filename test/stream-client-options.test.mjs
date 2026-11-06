@@ -23,3 +23,11 @@ test("stream clients keep the control client's identity and session", () => {
   assert.equal(opts.countryCode, cfg.country);
   assert.ok(opts.store, "must hydrate from the shared session store");
 });
+
+test("P2P_PUNCH_SPREAD reaches the stream client; a malformed value leaves it off", () => {
+  const base = { EUFY_EMAIL: "x@y.z", EUFY_PASSWORD: "pw" };
+  const on = loadConfig({ ...base, P2P_PUNCH_SPREAD: "35" });
+  assert.equal(streamClientOptions(on.cfg).p2pPunchSpread, 35);
+  assert.equal(loadConfig(base).cfg.p2pPunchSpread, undefined);
+  assert.equal(loadConfig({ ...base, P2P_PUNCH_SPREAD: "wide" }).cfg.p2pPunchSpread, undefined);
+});
