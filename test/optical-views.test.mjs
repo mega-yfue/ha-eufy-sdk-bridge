@@ -185,6 +185,16 @@ test("unsupported or malformed Full-HD selections do not open media or hide behi
   assert.ok(start.error);
 });
 
+test("a stored Full-HD preview can retain the same optic's native picture without opening media", async (t) => {
+  const h = await setup(t, { outputs: ["1080p"] });
+  await fs.writeFile(path.join(h.dir, `last-live-${SN}_view_1.jpg`), "same-optic-stored");
+  const response = await fetch(`${h.base}/snapshot/${SN}?view=1&outputResolution=1080p&mode=stored`);
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "same-optic-stored");
+  assert.equal(h.calls.snapshots.length, 0);
+  assert.equal(h.calls.opens.length, 0);
+});
+
 test("legacy SDKs and single-view cameras retain one primary source", async (t) => {
   for (const opts of [{ legacy: true }, { views: [0], model: "T8P00" }]) {
     const h = await setup(t, opts);

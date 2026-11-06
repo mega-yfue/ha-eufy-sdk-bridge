@@ -226,6 +226,14 @@ export function createHttpHandler(ctx) {
       // watched (live-still.mjs). Either may be the more recent one, so serve whichever is newer.
       const candidates = [
         { file: path.join(eventImageDir, `last-live-${source.id}.jpg`), label: "last live picture" },
+        ...(outputResolution
+          ? [
+              {
+                file: path.join(eventImageDir, `last-live-${cameraView(sn, view).id}.jpg`),
+                label: "same optic's default-output picture",
+              },
+            ]
+          : []),
         ...(view === 0
           ? [{ file: path.join(eventImageDir, `last-event-${sn}.jpg`), label: "last event thumbnail" }]
           : []),
