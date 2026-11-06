@@ -70,11 +70,32 @@ test("device view reports p2pReachable for a standalone device with a live sessi
   assert.equal(rec.p2pReachable, true);
 });
 
-test("device view omits p2pReachable when only the HomeBase (not the device) has a session", async () => {
-  // The session is keyed by the parent station, not the child camera — a parent being up does not
-  // prove the child is, so the field stays absent.
+test("device view omits p2pReachable when a stray session can't be tied to the device's station", async () => {
+  // No deviceState → the device's station is unknown, so a session keyed by some other serial (HB1)
+  // can't be attributed to this device and the field stays absent.
   const { describeDevice } = view({
     getP2pSessions: () => new Map([["HB1", { isConnected: true }]]),
+  });
+  const rec = await describeDevice("CAM1");
+  assert.ok(!("p2pReachable" in rec));
+});
+
+test("device view reports p2pReachable for a HomeBase-attached device when its station's session is live", async () => {
+  // The camera's session is keyed by its station (HB1), which is connected — the bridge reaches the
+  // child through the parent, so it is reachable even though CAM1 itself keys no session.
+  const { describeDevice } = view({
+    deviceState: () => ({ sn: "CAM1", stationSn: "HB1" }),
+    getP2pSessions: () => new Map([["HB1", { isConnected: true }]]),
+  });
+  const rec = await describeDevice("CAM1");
+  assert.equal(rec.p2pReachable, true);
+});
+
+test("device view omits p2pReachable for an attached device when its station's session is down", async () => {
+  // Station known but its session is not connected → no live transport, so staleness decides (field absent).
+  const { describeDevice } = view({
+    deviceState: () => ({ sn: "CAM1", stationSn: "HB1" }),
+    getP2pSessions: () => new Map([["HB1", { isConnected: false }]]),
   });
   const rec = await describeDevice("CAM1");
   assert.ok(!("p2pReachable" in rec));
