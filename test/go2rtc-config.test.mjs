@@ -19,10 +19,10 @@ const cams = [
   { sn: "SENSOR1" }, // no stream path → not a camera, must not appear
 ];
 
-async function generate(extra = {}) {
+async function generate(extra = {}, devices = cams) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "go2rtc-"));
   const file = path.join(dir, "go2rtc.yaml");
-  const sns = await writeGo2rtcConfig({ selfHost: "127.0.0.1", port: 3000, ...extra, go2rtcConfig: file }, cams);
+  const sns = await writeGo2rtcConfig({ selfHost: "127.0.0.1", port: 3000, ...extra, go2rtcConfig: file }, devices);
   return { yaml: fs.readFileSync(file, "utf8"), sns };
 }
 
@@ -61,4 +61,37 @@ test("moved go2rtc ports reach both the YAML and the stream.start RTSP URL", asy
   const ws = { readyState: 1, OPEN: 1, send: (s) => sent.push(JSON.parse(s)) };
   await ctx.handleMessage(ws, Buffer.from(JSON.stringify({ id: 1, cmd: "stream.start", sn: "CAM1" })));
   assert.equal(sent[0].rtsp, "rtsp://127.0.0.1:18554/CAM1");
+});
+
+test("known indoor H.264 feeds bypass format probing without transcoding or losing #async", async () => {
+  const { yaml, sns } = await generate({}, [
+    { sn: "INDOOR1", model: "T8400", stream: "/stream/INDOOR1" },
+    { sn: "INDOOR2", model: "T8410", stream: "/stream/INDOOR2" },
+    { sn: "OTHER", model: "T8416", stream: "/stream/OTHER" },
+    { sn: "UNKNOWN", stream: "/stream/UNKNOWN" },
+  ]);
+  assert.deepEqual(sns, ["INDOOR1", "INDOOR2", "OTHER", "UNKNOWN"]);
+  assert.ok(yaml.includes('ffmpeg:\n  eufy_h264: "-analyzeduration 0 -probesize 32768 -f h264 -i {input}"\n'));
+  for (const sn of ["INDOOR1", "INDOOR2"]) {
+    assert.ok(yaml.includes(`${sn}: ffmpeg:http://127.0.0.1:3000/stream/${sn}#video=copy#async#input=eufy_h264\n`));
+  }
+  for (const sn of ["OTHER", "UNKNOWN"]) {
+    assert.ok(yaml.includes(`${sn}: ffmpeg:http://127.0.0.1:3000/stream/${sn}#video=copy#async\n`));
+  }
+});
+
+test("the input selection also preserves advertised optical-view paths", async () => {
+  const { yaml } = await generate({}, [
+    {
+      sn: "INDOOR",
+      model: "T8410",
+      stream: "/stream/INDOOR",
+      views: [{ id: "INDOOR_MAIN", stream: "/stream/INDOOR?view=main" }],
+    },
+  ]);
+  assert.ok(
+    yaml.includes(
+      "INDOOR_MAIN: ffmpeg:http://127.0.0.1:3000/stream/INDOOR?view=main#video=copy#async#input=eufy_h264\n",
+    ),
+  );
 });
