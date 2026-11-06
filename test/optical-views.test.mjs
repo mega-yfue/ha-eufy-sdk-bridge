@@ -19,7 +19,7 @@ const SN = "T8000P0000000001";
 const HUB = "T8000P0000000000";
 
 /** SDK boundary fixture retains product, category, owner name, parent channel and capabilities. */
-async function setup(t, { views = [0, 1], legacy = false, model = "T8E00", liveOnly = false } = {}) {
+async function setup(t, { views = [0, 1], legacy = false, model = "T8E00", liveOnly = false, outputs = [] } = {}) {
   const record = {
     sn: SN,
     model,
@@ -35,6 +35,7 @@ async function setup(t, { views = [0, 1], legacy = false, model = "T8E00", liveO
   state.flags.ready = true;
   const calls = { opens: [], snapshots: [], stored: 0, dropped: 0, failures: 0 };
   const camera = {
+    ...(outputs.length ? { outputResolutions: () => outputs } : {}),
     ...(!legacy ? { views: () => views } : {}),
     openReadable: async (opts) => {
       const feed = new PassThrough();
@@ -144,6 +145,44 @@ test("devices.list and device.state advertise the SDK's views with stable primar
     { view: 1, id: `${SN}_view_1`, stream: `/stream/${SN}?view=1`, snapshot: `/snapshot/${SN}?view=1` },
   ]);
   assert.equal(h.calls.opens.length, 0);
+});
+
+test("Full HD flows through advertised sources, HTTP and go2rtc without replacing default views", async (t) => {
+  const h = await setup(t, { outputs: ["1080p"] });
+  const reply = await h.ws("devices.list");
+  const views = reply.devices[0].views;
+  assert.equal(views[0].id, SN);
+  assert.equal(views[1].id, `${SN}_view_1`);
+  assert.equal(views[1].outputs[0].outputResolution, "1080p");
+  assert.equal(views[1].outputs[0].id, `${SN}_view_1_output_1080p`);
+  const start = await h.ws("stream.start", { view: 1, outputResolution: "1080p" });
+  assert.match(start.rtsp, new RegExp(`${SN}_view_1_output_1080p$`));
+  const pulled = await h.pull("?view=1&outputResolution=1080p");
+  assert.equal(pulled.response.status, 200);
+  assert.equal(h.calls.opens[0].opts.outputResolution, "1080p");
+  assert.equal(h.calls.opens[0].opts.view, 1);
+  await pulled.reader.cancel();
+  h.ctx.cfg.go2rtcConfig = path.join(h.dir, "go2rtc.yaml");
+  await writeGo2rtcConfig(h.ctx.cfg, reply.devices);
+  const config = await fs.readFile(h.ctx.cfg.go2rtcConfig, "utf8");
+  assert.match(config, new RegExp(`${SN}_view_1_output_1080p:.*view=1&outputResolution=1080p`));
+});
+
+test("unsupported or malformed Full-HD selections do not open media or hide behind instant start", async (t) => {
+  const h = await setup(t);
+  h.ctx.cfg.streamInstantStart = true;
+  for (const query of [
+    "?outputResolution=1080p",
+    "?outputResolution=4K",
+    "?outputResolution=1080p&outputResolution=1080p",
+  ]) {
+    const r = await h.pull(query);
+    assert.ok([400, 404].includes(r.response.status));
+  }
+  assert.equal(h.calls.opens.length, 0);
+  assert.equal(h.calls.failures, 0);
+  const start = await h.ws("stream.start", { outputResolution: "1080p" });
+  assert.ok(start.error);
 });
 
 test("legacy SDKs and single-view cameras retain one primary source", async (t) => {

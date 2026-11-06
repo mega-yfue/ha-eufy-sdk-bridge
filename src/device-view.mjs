@@ -1,6 +1,6 @@
 import { unobservableMembers } from "@mega-yfue/eufy-sdk";
 import { onBatteryPower } from "./power.mjs";
-import { cameraViews, cameraView } from "./camera-views.mjs";
+import { cameraViews, cameraViewOutputs } from "./camera-views.mjs";
 // The host-facing view of a device: identity + capabilities + live property values + a stream path for
 // cameras. This is the shape the WS `devices.list` / `device.state` / `device.properties` commands and
 // the go2rtc camera registration both read, so a camera is "a device describeDevice gave a `stream`",
@@ -36,7 +36,9 @@ export function createDeviceView(ctx) {
       ...liveness(m.sn, station.stationSn), // availability facts a host turns into an online/offline verdict
       ...station, // the station it hangs off: its own serial when standalone
       stream: isCamera ? `/stream/${m.sn}` : undefined,
-      views: isCamera ? cameraViews(dev.camera?.()).map((view) => cameraView(m.sn, view)) : undefined,
+      views: isCamera
+        ? cameraViews(dev.camera?.()).map((view) => cameraViewOutputs(m.sn, view, dev.camera?.()))
+        : undefined,
       streaming: isCamera ? streaming.has(m.sn) : undefined, // live P2P feed active right now?
       // "battery" | "wired", decided the way the SDK decides it (power.mjs): the `battery` capability alone
       // also marks mains-only models.
