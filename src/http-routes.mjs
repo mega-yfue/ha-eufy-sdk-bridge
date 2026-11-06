@@ -216,7 +216,7 @@ export function createHttpHandler(ctx) {
         return json(res, 400, { error: "snapshot mode must be specified at most once" });
       }
       const snapshotMode = snapshotModes[0] ?? null;
-      if (snapshotMode != null && !["auto", "stored", "live"].includes(snapshotMode)) {
+      if (snapshotMode != null && !["auto", "stored", "live", "screen"].includes(snapshotMode)) {
         return json(res, 400, { error: "invalid snapshot mode", mode: snapshotMode });
       }
 
@@ -250,6 +250,19 @@ export function createHttpHandler(ctx) {
           return false;
         }
       };
+      // mode=screen: the last picture someone WATCHED (last-live-<sn>.jpg, see /last-screen), never the last
+      // event and never a wake. A camera that was never watched falls back to the usual newest-on-disk choice.
+      if (snapshotMode === "screen") {
+        try {
+          const screen = await fs.promises.readFile(candidates[0].file);
+          ctx.eventLog?.(`/snapshot ${sn} → 200 last screen (${screen.length}B, from disk; mode=screen)`);
+          res.writeHead(200, { "content-type": "image/jpeg", "content-length": screen.length });
+          return res.end(screen);
+        } catch {
+          if (await servePersisted("mode=screen but never watched — newest picture on disk")) return;
+          return json(res, 404, { error: "no picture on disk yet", mode: snapshotMode });
+        }
+      }
       try {
         const device = await eufy.getDevice(sn);
         const cam = device.camera?.();
@@ -327,6 +340,23 @@ export function createHttpHandler(ctx) {
     // The latest detection thumbnail the SDK downloaded + retained (no live capture). The SDK's cache is
     // in-memory (cleared on restart / watchdog recovery), so we also persist each served thumbnail to disk
     // and fall back to it when nothing is retained — the "Last event" image then survives restarts.
+    // "Last screen": the last picture someone WATCHED live (kept by live-still.mjs while a stream runs),
+    // separate from "Last event" (/event-image). Never wakes the camera. 404 until it was watched once.
+    // x-saved-at carries when the picture was taken, so a consumer can show its age.
+    if (kind === "last-screen" && sn) {
+      const file = path.join(eventImageDir, `last-live-${sn}.jpg`);
+      try {
+        const [jpeg, st] = await Promise.all([fs.promises.readFile(file), fs.promises.stat(file)]);
+        res.writeHead(200, {
+          "content-type": "image/jpeg",
+          "content-length": jpeg.length,
+          "x-saved-at": new Date(st.mtimeMs).toISOString(),
+        });
+        return res.end(jpeg);
+      } catch {
+        return json(res, 404, { error: "camera not watched yet — no last screen", deviceSn: sn });
+      }
+    }
 
     if (kind === "event-image" && sn) {
       // HA fetches this to render "Last event" (usually right after a detection event). Trace the
@@ -522,7 +552,12 @@ export function createHttpHandler(ctx) {
           feed.pipe(res);
           // Remember the stream's latest keyframe so the still can show what was last SEEN, not only the
           // last event — without ever waking the camera for it (see live-still.mjs).
-          const still = createLiveStillTap({ sn: source.id, dir: eventImageDir, log: ctx.eventLog ?? (() => {}) });
+          const still = createLiveStillTap({
+            sn: source.id,
+            dir: eventImageDir,
+            log: ctx.eventLog ?? (() => {}),
+            onSaved: view === 0 ? () => ctx.broadcast?.({ event: "lastScreenUpdated", deviceSn: sn }) : undefined,
+          });
           still.onChunk(first);
           feed.on("data", still.onChunk);
           let cleanedUp = false;

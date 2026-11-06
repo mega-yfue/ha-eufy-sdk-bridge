@@ -114,3 +114,15 @@ test("device view names a standalone device as its own station", async () => {
   const rec = await describeDevice("CAM1");
   assert.equal(rec.stationSn, "CAM1");
 });
+
+test("a camera advertises its last screen, a device without video does not", async () => {
+  const { describeDevice } = view({ deviceState: () => ({ sn: "CAM1", stationSn: "CAM1" }) });
+  assert.equal((await describeDevice("CAM1")).lastScreen, "/last-screen/CAM1");
+  const sensor = {
+    describe: () => ({ sn: "S1", name: "S1", model: "T8900", modelName: "Sensor", codec: "sensor", capabilities: [] }),
+    getProperties: () => ({}),
+  };
+  const eufy = { getDevice: async () => sensor, getP2pSessions: () => new Map() };
+  const rec = await createDeviceView({ eufy, state: { streaming: new Set() } }).describeDevice("S1");
+  assert.equal(rec.lastScreen, undefined);
+});

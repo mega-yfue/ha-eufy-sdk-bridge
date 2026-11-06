@@ -36,6 +36,7 @@ export function createDeviceView(ctx) {
       ...liveness(m.sn, station.stationSn), // availability facts a host turns into an online/offline verdict
       ...station, // the station it hangs off: its own serial when standalone
       stream: isCamera ? `/stream/${m.sn}` : undefined,
+      lastScreen: isCamera ? `/last-screen/${m.sn}` : undefined, // also tells a host this bridge has screen.take
       views: isCamera ? cameraViews(dev.camera?.()).map((view) => cameraView(m.sn, view)) : undefined,
       streaming: isCamera ? streaming.has(m.sn) : undefined, // live P2P feed active right now?
       // "battery" | "wired", decided the way the SDK decides it (power.mjs): the `battery` capability alone
