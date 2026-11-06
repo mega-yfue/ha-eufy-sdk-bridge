@@ -205,6 +205,14 @@ test("ws: auth.status, unknown cmd, and the auth gate", async () => {
   httpServer.close();
 });
 
+test("screen.take: refused before auth, like every other device command", async () => {
+  const { ctx, httpServer } = buildCtx();
+  const gated = await wsCall(ctx, { id: 1, cmd: "screen.take", sn: "SIRENCAM1" });
+  assert.equal(gated[0].ok, false);
+  assert.match(gated[0].error, /not authenticated/);
+  httpServer.close();
+});
+
 test("device.action: routes siren trigger/stop, and only where the surface exists", async () => {
   const { ctx, state, httpServer } = buildCtx();
   state.flags.ready = true;
