@@ -35,13 +35,14 @@ function factory() {
 }
 
 function setup(create) {
-  const config = loadConfig({ EUFY_EMAIL: "x@y.z", EUFY_PASSWORD: "pw" });
+  const config = loadConfig({ EUFY_EMAIL: "x@y.z", EUFY_PASSWORD: "pw", STREAM_OPEN_ATTEMPTS: "1" });
   const state = createState();
   state.flags.ready = true;
   const failures = [];
   const ctx = {
     ...config,
     state,
+    eventImageDir: undefined, // no kept keyframe: the open must start in the same tick as before
     eventLog: () => {},
     broadcast: () => {},
     noteStreamOpened: () => {},

@@ -95,6 +95,7 @@ async function setup(t, { views = [0, 1], legacy = false, model = "T8E00", liveO
     noteStreamOpened() {},
   };
   ctx.cfg.streamBatteryBudgetMs = 12345;
+  ctx.cfg.streamInstantStart = false;
   Object.assign(ctx, createDeviceView(ctx));
   const server = http.createServer((req, res) => void handler(req, res));
   const handler = createHttpHandler(ctx);
@@ -273,6 +274,19 @@ test("an unsupported view cannot read an old per-view cache", async (t) => {
   const response = await fetch(`${h.base}/snapshot/${SN}?view=1&mode=stored`);
   await response.body.cancel();
   assert.equal(response.status, 404);
+});
+
+test("instant start primes the primary view only, so an unsupported view still answers 404", async (t) => {
+  const h = await setup(t);
+  h.ctx.cfg.streamInstantStart = true;
+  h.ctx.cfg.streamPlaceholder = true;
+  const invalid = await h.pull("?view=9");
+  assert.equal(invalid.response.status, 404);
+  assert.equal(h.calls.opens.length, 0);
+  const secondary = await h.pull("?view=1");
+  assert.equal(secondary.response.status, 200);
+  assert.equal(secondary.first, "optic-1");
+  await secondary.reader.cancel();
 });
 
 test("selected optics preserve the live-only fallback and generic binary response", async (t) => {

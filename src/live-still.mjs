@@ -10,6 +10,9 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
+/** Where the newest live keyframe of a camera is kept as raw Annex-B (beside last-live-<sn>.jpg). */
+export const lastLiveKeyframeFile = (dir, sn) => path.join(dir, `last-live-${sn}.annexb`);
+
 /**
  * The codec of an Annex-B access unit that carries parameter sets — i.e. a keyframe that decodes on its own —
  * else null. H.264 is recognised by its SPS (type 7). H.265 needs BOTH its VPS (type 32) and SPS (type 33):
@@ -107,6 +110,8 @@ export function createLiveStillTap({
       try {
         const jpeg = await toJpeg(frame.au, frame.codec);
         await fs.promises.writeFile(path.join(dir, `last-live-${sn}.jpg`), jpeg);
+        // The same keyframe, undecoded: the next /stream answers with it at once (see stream-primer.mjs).
+        await fs.promises.writeFile(lastLiveKeyframeFile(dir, sn), frame.au);
         savedSeq = Math.max(savedSeq, frame.seq);
         log(`/stream ${sn} → kept the live picture as the still (${jpeg.length}B, ${frame.codec})`);
         return true;
