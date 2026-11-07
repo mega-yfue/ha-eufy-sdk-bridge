@@ -5,6 +5,7 @@
 import { spawn } from "node:child_process";
 import { writeGo2rtcConfig } from "../go2rtc-config.mjs";
 import { pushFieldSummary } from "./push-trace.mjs";
+import { createArmingConfirm } from "./arming-confirm.mjs";
 import { RECORD_TRIGGER_PERSON } from "./config.mjs";
 
 // #35 night-vision upgrade timings. The person classification of a recording lands a few seconds after
@@ -99,6 +100,8 @@ export function createBoot(ctx) {
       // A command ack = the device/station answered the bridge, so it is reachable. The ack info carries
       // the acked device's serial as `sn` (ff09/mqtt-dp/aiot routers all stamp it); skip if absent.
       eufy.on("commandAck", (info) => ctx.noteActivity?.(info?.sn));
+      // A guard-mode write the station never confirmed is re-sent (see arming-confirm.mjs).
+      ctx.armingConfirm = createArmingConfirm({ eufy, log: (l) => console.log(`[bridge] ${l}`) });
       // #35 night-vision upgrade: a camera unsure at trigger time pushes `motion`, then the recording is
       // classified person. When EUFY_PERSON_FROM_RECORD is on, a `motion` push schedules a read of the
       // freshest record; if its trigger_type is the person value, re-emit `personDetected`. `recentPerson`
