@@ -8,6 +8,7 @@ import { normalizePushImage } from "@mega-yfue/eufy-sdk";
 import path from "node:path";
 import { rosterEntry, firstJsonObject } from "./faces.mjs";
 import { storedThumbnailSeenAt } from "./stored-thumbnail.mjs";
+import { createStationSilenceGuard } from "./station-silence.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -44,6 +45,10 @@ const AUTOHEAL_COOLDOWN_MS = Number(process.env.EVENT_IMAGE_AUTOHEAL_COOLDOWN_MS
 // this point the reply says "not yet" and the refresh finishes in the background, nudging HA if an image
 // lands (ha-eufy-sdk#73).
 const FORCE_REFRESH_ANSWER_MS = Number(process.env.EVENT_IMAGE_FORCE_REFRESH_ANSWER_MS) || 10000;
+// A station that has answered the direct read and then leaves this many in a row unanswered, on a session
+// that still reports itself connected, has its P2P session reopened; if it stays silent for as many again,
+// the bridge exits for a clean restart (see station-silence.mjs). Env-tunable, 0 disables.
+const SILENT_READS = Number(process.env.EVENT_IMAGE_SILENT_READS ?? 3);
 
 export function createWarmup(ctx) {
   const { eufy, eventImageDir } = ctx;
@@ -156,6 +161,17 @@ export function createWarmup(ctx) {
   const LATEST_INFO_MAX_SILENT = 3;
   const LATEST_INFO_RETRY_MS = Number(process.env.EVENT_IMAGE_LATEST_INFO_RETRY_MS) || 10 * 60_000;
 
+  const silenceGuard = createStationSilenceGuard({
+    threshold: Number.isFinite(SILENT_READS) ? SILENT_READS : 3,
+    recycle: async (stationSn) => {
+      await eufy.getP2pSessions().get(stationSn)?.close();
+      await eufy.connectStation(stationSn);
+      console.log(`[bridge] station ${stationSn} connection reopened`);
+    },
+    restart: () => process.exit(1),
+    log: (message) => console.error(message),
+  });
+
   /** Whether a station silent on the direct read should be asked latest-info now. */
   function latestInfoDue(stationSn) {
     if (latestInfoAnswered.has(stationSn) || (latestInfoSilent.get(stationSn) ?? 0) < LATEST_INFO_MAX_SILENT)
@@ -261,6 +277,7 @@ export function createWarmup(ctx) {
 
     let records = parsed?.data ?? firstJsonObject(chunk)?.data ?? [];
     let received = `raw ${chunk.length}B received`;
+    const answeredBefore = directReadAnswered.has(stationSn);
     if (chunk.length) directReadAnswered.add(stationSn);
     else if (!directReadAnswered.has(stationSn) && latestInfoDue(stationSn)) {
       const latest = await queryLatestInfoCovers(session, accountId, stationSn);
@@ -271,6 +288,12 @@ export function createWarmup(ctx) {
       // Diagnostic: distinguish "response never arrived" (chunk empty) from "arrived but unparseable /
       // no data" (chunk large) so a recurring failure points straight at transport vs shape.
       ctx.eventLog?.(`history query: no records parsed (${received})`);
+    }
+    // A read lost because the session itself dropped is the SDK's to recover, so only reads on a session
+    // that still reports itself up are counted. Nothing is counted while a camera streams, so the reopen
+    // never cuts off a live view.
+    if (chunk.length || (session.isConnected && !ctx.state.streaming?.size)) {
+      await silenceGuard.noteRead(stationSn, { answered: chunk.length > 0, answeredBefore });
     }
     // Keep the newest record per device (max start_time), then take its crop path. Ties (or a firmware
     // that omits start_time) fall back to last-wins, matching the old behaviour for that degenerate case.
