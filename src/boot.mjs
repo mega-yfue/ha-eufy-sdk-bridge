@@ -92,7 +92,13 @@ export function createBoot(ctx) {
         eufy.on("commandAck", (info) => dbg(`commandAck ${JSON.stringify(info)}`));
         eufy.on("push", (ev) => dbg(pushFieldSummary(ev)));
       }
-      eufy.on("push", (ev) => ctx.noteRecording?.(ev)); // the recording a detection named, for /clip
+      eufy.on("push", (ev) => {
+        ctx.noteActivity?.(ev?.deviceSn); // a push = the device is alive right now (cloud lastSeen may lie)
+        ctx.noteRecording?.(ev); // the recording a detection named, for /clip
+      });
+      // A command ack = the device/station answered the bridge, so it is reachable. The ack info carries
+      // the acked device's serial as `sn` (ff09/mqtt-dp/aiot routers all stamp it); skip if absent.
+      eufy.on("commandAck", (info) => ctx.noteActivity?.(info?.sn));
       // #35 night-vision upgrade: a camera unsure at trigger time pushes `motion`, then the recording is
       // classified person. When EUFY_PERSON_FROM_RECORD is on, a `motion` push schedules a read of the
       // freshest record; if its trigger_type is the person value, re-emit `personDetected`. `recentPerson`
@@ -112,6 +118,7 @@ export function createBoot(ctx) {
       };
       for (const e of FORWARDED_EVENTS)
         eufy.on(e, (payload) => {
+          ctx.noteActivity?.(payload?.deviceSn); // any inbound event = the device is alive right now
           const detection = DETECTION_EVENTS.has(e);
           if (e === "personDetected" && payload?.deviceSn) recentPerson.set(payload.deviceSn, Date.now());
           if (detection) {

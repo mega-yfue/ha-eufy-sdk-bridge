@@ -6,6 +6,30 @@ import { cameraViews, cameraView } from "./camera-views.mjs";
 // the go2rtc camera registration both read, so a camera is "a device describeDevice gave a `stream`",
 // not `deviceClass === "camera"` (the SDK downgrades a camera behind a HomeBase to "other").
 
+// "Heard locally within this window ⇒ reachable" thresholds, matched to the integration's staleness
+// windows so the bridge's honest local signal and the host's offline rule agree. A station or a mains
+// camera reports often (keepalives/params), so a short window is enough; a battery camera sleeps between
+// detections, so it gets a long one before quiet reads as offline. Sensors/locks/lights are never
+// stale-offlined (no window) — they report only on change and the host keeps the last value.
+const STATION_ACTIVITY_WINDOW_MS = 30 * 60 * 1000;
+const MAINS_CAMERA_ACTIVITY_WINDOW_MS = 30 * 60 * 1000;
+const BATTERY_CAMERA_ACTIVITY_WINDOW_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * How recently the bridge must have heard from a device for local activity to count as reachable, per
+ * device class, or `undefined` for a class that is never stale-offlined. `m` is the SDK's `describe()`
+ * meta (`codec`, `model`, `capabilities`). Battery-vs-mains is decided exactly as the builder decides it.
+ */
+function activityWindowMs(m) {
+  if (m.codec === "station") return STATION_ACTIVITY_WINDOW_MS;
+  const isCamera = m.capabilities?.includes("camera") || m.capabilities?.includes("video");
+  if (isCamera)
+    return onBatteryPower(m.model, m.capabilities)
+      ? BATTERY_CAMERA_ACTIVITY_WINDOW_MS
+      : MAINS_CAMERA_ACTIVITY_WINDOW_MS;
+  return undefined;
+}
+
 export function createDeviceView(ctx) {
   const { eufy } = ctx;
   // Which members of a bound capability are settable but never reported; injectable so a test can state it.
@@ -33,7 +57,7 @@ export function createDeviceView(ctx) {
       capabilities: m.capabilities,
       state: propertyState(dev), // live property values ({ battery: 74, motion: false, … })
       ...decodedReadings(dev, m),
-      ...liveness(m.sn, station.stationSn), // availability facts a host turns into an online/offline verdict
+      ...liveness(m.sn, station.stationSn, activityWindowMs(m)), // availability facts a host turns into an online/offline verdict
       ...station, // the station it hangs off: its own serial when standalone
       stream: isCamera ? `/stream/${m.sn}` : undefined,
       lastScreen: isCamera ? `/last-screen/${m.sn}` : undefined, // also tells a host this bridge has screen.take
@@ -71,8 +95,12 @@ export function createDeviceView(ctx) {
    * vendor observation when one has been seen (authoritative); `lastSeenMs` is when the device last
    * reported to the cloud. Both are omitted when the SDK has nothing — an older SDK, or a device that
    * has never emitted the signal — so a host that relies on `state.deviceStatus` is unaffected.
+   *
+   * `windowMs` is the device class's local-activity window (undefined ⇒ never stale-offlined): a device
+   * heard from within it counts as `p2pReachable` even with no live session, because local activity is the
+   * honest signal where the cloud `lastSeen` lies.
    */
-  function liveness(sn, stationSn) {
+  function liveness(sn, stationSn, windowMs) {
     const out = {};
     const lastSeenMs = eufy.deviceState?.(sn)?.lastSeenMs;
     if (typeof lastSeenMs === "number") out.lastSeenMs = lastSeenMs;
@@ -90,6 +118,14 @@ export function createDeviceView(ctx) {
       sessions?.get(sn)?.isConnected === true ||
       (typeof stationSn === "string" && stationSn !== sn && sessions?.get(stationSn)?.isConnected === true);
     if (reachable) out.p2pReachable = true;
+    // Even without a live P2P session, a device the bridge heard from within its class window is reachable
+    // RIGHT NOW: an inbound event (detection, property change, command ack) is honest proof of life, unlike
+    // the cloud `lastSeen`, which never moves for a device that reports only locally (HomeBase battery cams,
+    // standalone RTC devices). `windowMs` is undefined for classes that are never stale-offlined, so this
+    // gate only fires for stations and cameras; the session-based `p2pReachable` above still wins when set.
+    const heard = ctx.heardMs?.(sn);
+    if (typeof windowMs === "number" && typeof heard === "number" && Date.now() - heard < windowMs)
+      out.p2pReachable = true;
     return out;
   }
 
