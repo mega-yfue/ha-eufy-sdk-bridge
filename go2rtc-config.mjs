@@ -18,9 +18,18 @@ const isCamera = (d) => Boolean(d.stream);
 // How a camera's video reaches go2rtc's consumers: copied, or converted to H.264 for the cameras listed in
 // TRANSCODE_H264 (config.mjs says why). The height is -2, not go2rtc's -1, because x264 needs even
 // dimensions and -1 can come out odd.
+//
+// The rate cap keeps a converted keyframe near the size the eufy cameras send themselves. Uncapped, x264
+// made about 1.8 Mbit/s of an S340's dusk picture, some 470 packets in a keyframe's second, and those
+// reached a browser over WebRTC with holes in them. go2rtc resends nothing, so the decoder waited for a
+// clean keyframe that never came and the picture froze about 3 s in. A camera sending H.264 itself makes
+// about 0.4 Mbit/s with keyframes of about 100 packets and loses none on the same link. Capped, the
+// converted S340 lost no packet in 45 s.
+const RATE_CAP = "#raw=-maxrate 1500k -bufsize 1000k";
 function videoParams(cfg, sn) {
   if (!cfg.transcodeH264?.includes(sn)) return "#video=copy";
-  return cfg.transcodeWidth ? `#video=h264#width=${cfg.transcodeWidth}#height=-2` : "#video=h264";
+  const size = cfg.transcodeWidth ? `#width=${cfg.transcodeWidth}#height=-2` : "";
+  return `#video=h264${size}${RATE_CAP}`;
 }
 
 export async function writeGo2rtcConfig(cfg, devices) {

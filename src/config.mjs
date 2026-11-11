@@ -162,8 +162,9 @@ export function loadConfig(env = process.env) {
     transcodeH264: list(env.TRANSCODE_H264),
     // The width a converted feed is scaled to, its height following. Encoding is the cost, and it grows with
     // the picture: a 2880x1616 S340 converted at 1280 wide took about half a desktop core in real time.
-    // Positive whole pixels; anything else keeps the camera's own size.
-    transcodeWidth: positiveInt(env.TRANSCODE_WIDTH ?? 1280),
+    // Unset or empty: 1280, so a launcher that exports the variable empty gets the default too. Positive
+    // whole pixels; anything else (0) keeps the camera's own size.
+    transcodeWidth: positiveInt(env.TRANSCODE_WIDTH || 1280),
     // How long after the push /clip waits before downloading a HomeBase 2 recording, so the station has
     // finished writing it. Set it at least to the camera's clip length. Default 30s.
     clipSettleMs: env.CLIP_SETTLE_MS != null ? Number(env.CLIP_SETTLE_MS) : 30_000,

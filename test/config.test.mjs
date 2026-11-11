@@ -23,6 +23,7 @@ test("TRANSCODE_H264: empty by default, a comma- or space-separated list of seri
 
 test("TRANSCODE_WIDTH: 1280 by default, a custom width honoured, anything else keeps the camera's size", () => {
   assert.equal(loadConfig(base).cfg.transcodeWidth, 1280);
+  assert.equal(loadConfig({ ...base, TRANSCODE_WIDTH: "" }).cfg.transcodeWidth, 1280); // exported empty
   assert.equal(loadConfig({ ...base, TRANSCODE_WIDTH: "1920" }).cfg.transcodeWidth, 1920);
   assert.equal(loadConfig({ ...base, TRANSCODE_WIDTH: "0" }).cfg.transcodeWidth, undefined);
   assert.equal(loadConfig({ ...base, TRANSCODE_WIDTH: "wide" }).cfg.transcodeWidth, undefined);

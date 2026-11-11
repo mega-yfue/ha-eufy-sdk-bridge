@@ -34,16 +34,21 @@ test("every camera stream is generated with #async", async () => {
 });
 
 // An H.265 camera plays nowhere that lacks an H.265 decoder (a Pi's Chromium, WebRTC in desktop Chrome),
-// so a listed camera is converted to H.264, scaled, with an even height; the rest are still copied.
-test("a camera listed for transcoding is converted to H.264 at the set width", async () => {
+// so a listed camera is converted to H.264, scaled, with an even height, and rate-capped (go2rtc-config.mjs
+// says why: uncapped, the live view froze); the rest are still copied.
+const CAP = "#raw=-maxrate 1500k -bufsize 1000k";
+
+test("a camera listed for transcoding is converted to H.264 at the set width, rate-capped", async () => {
   const { yaml } = await generate({ transcodeH264: ["CAM2"], transcodeWidth: 1280 });
-  assert.match(yaml, /CAM2: ffmpeg:http:\/\/127\.0\.0\.1:3000\/stream\/CAM2#video=h264#width=1280#height=-2#async/);
-  assert.match(yaml, /CAM1: ffmpeg:http:\/\/127\.0\.0\.1:3000\/stream\/CAM1#video=copy#async/);
+  assert.ok(
+    yaml.includes(`CAM2: ffmpeg:http://127.0.0.1:3000/stream/CAM2#video=h264#width=1280#height=-2${CAP}#async\n`),
+  );
+  assert.ok(yaml.includes("CAM1: ffmpeg:http://127.0.0.1:3000/stream/CAM1#video=copy#async\n"));
 });
 
-test("a camera listed for transcoding keeps its own size when no width is set", async () => {
+test("a camera listed for transcoding keeps its own size when no width is set, still rate-capped", async () => {
   const { yaml } = await generate({ transcodeH264: ["CAM2"] });
-  assert.match(yaml, /CAM2: ffmpeg:http:\/\/127\.0\.0\.1:3000\/stream\/CAM2#video=h264#async/);
+  assert.ok(yaml.includes(`CAM2: ffmpeg:http://127.0.0.1:3000/stream/CAM2#video=h264${CAP}#async\n`));
 });
 
 test("a device without a stream path is left out", async () => {
@@ -125,10 +130,12 @@ test("a camera listed for transcoding has every optical view converted", async (
     },
     { sn: "SINGLE", model: "T8P00", stream: "/stream/SINGLE" },
   ]);
-  assert.ok(yaml.includes("DUAL: ffmpeg:http://127.0.0.1:3000/stream/DUAL#video=h264#width=1920#height=-2#async\n"));
+  assert.ok(
+    yaml.includes(`DUAL: ffmpeg:http://127.0.0.1:3000/stream/DUAL#video=h264#width=1920#height=-2${CAP}#async\n`),
+  );
   assert.ok(
     yaml.includes(
-      "DUAL_view_1: ffmpeg:http://127.0.0.1:3000/stream/DUAL?view=1#video=h264#width=1920#height=-2#async\n",
+      `DUAL_view_1: ffmpeg:http://127.0.0.1:3000/stream/DUAL?view=1#video=h264#width=1920#height=-2${CAP}#async\n`,
     ),
   );
   assert.ok(yaml.includes("SINGLE: ffmpeg:http://127.0.0.1:3000/stream/SINGLE#video=copy#async\n"));
