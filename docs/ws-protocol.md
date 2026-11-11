@@ -593,6 +593,19 @@ for a name that is not a stamp, 404 for one the station no longer holds (`reason
 the SDK's `reason` when the download fails. `?cipher=<id>` passes the `cipherId` the list gives, which a
 HomeBase 2 needs and a HomeBase 3 ignores.
 
+With `RECORDINGS_DIR` set, the bridge saves every recording a HomeBase 3 lists to that folder as
+`<camera serial>/<YYYYMMDDTHHMMSSZ>.mp4`, named for its UTC start. It reads each station's list every
+`RECORDINGS_POLL_MS` and once more just before the station's midnight, downloads each recording
+`RECORDINGS_SETTLE_MS` after it ends, and skips one already saved. Recordings still to save are kept in
+`.queue.json` in that folder, so a restart or a day change does not drop them. A recording whose download
+fails three times (the station no longer holding it included) is given up on; a failure to write it (a full
+disk, a missing mount) is retried. A recording still unsaved two weeks after it started, past the station's
+retention, leaves the queue. A camera's
+recordings wait while its live view is open. Each file is written under a hidden `.<name>.part` name and
+renamed when complete. With `RECORDINGS_OLD_DIR` set, a saved recording older than `RECORDINGS_OLD_DAYS` is
+copied to that folder at the same path, then removed from `RECORDINGS_DIR`. Nothing moves when one folder is
+inside the other.
+
 go2rtc (bundled) turns `/stream/<sn>` into RTSP / WebRTC / MSE / HLS, so the frontend never speaks the
 raw video protocol.
 

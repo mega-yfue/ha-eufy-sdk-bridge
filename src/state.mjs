@@ -20,7 +20,7 @@ export function createState() {
       go2rtcProc: undefined,
     },
     // Interval handles, armed once at boot and cleared on shutdown.
-    timers: { watchdog: null, streamIdle: null, rtspIdle: null },
+    timers: { watchdog: null, streamIdle: null, rtspIdle: null, recordings: null, recordingsMidnight: null },
 
     clients: new Set(), // connected WS clients (broadcast targets)
     streaming: new Set(), // sns with a live P2P feed piping right now

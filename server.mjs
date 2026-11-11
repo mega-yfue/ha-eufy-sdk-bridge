@@ -34,6 +34,7 @@ import { createBoot } from "./src/boot.mjs";
 import { createSolix } from "./src/solix.mjs";
 import { createClips } from "./src/clip.mjs";
 import { createRecordings } from "./src/recordings.mjs";
+import { createRecordingArchive } from "./src/recording-archive.mjs";
 import { createHttpHandler } from "./src/http-routes.mjs";
 import { createWsServer } from "./src/ws-server.mjs";
 import { closeStreamClients } from "./streams.mjs";
@@ -83,6 +84,7 @@ Object.assign(
   createSolix(ctx),
   createClips(ctx),
   createRecordings(ctx),
+  createRecordingArchive(ctx),
 );
 
 const httpServer = http.createServer(createHttpHandler(ctx));
@@ -142,6 +144,9 @@ async function shutdown() {
   if (timers.watchdog) clearInterval(timers.watchdog);
   if (timers.streamIdle) clearInterval(timers.streamIdle);
   if (timers.rtspIdle) clearInterval(timers.rtspIdle);
+  clearInterval(timers.recordings);
+  clearTimeout(timers.recordingsMidnight);
+  timers.recordings = timers.recordingsMidnight = null; // a sweep still finishing plans no further read
   flags.go2rtcProc?.kill();
   await closeStreamClients();
   await ctx.stopSolix?.();

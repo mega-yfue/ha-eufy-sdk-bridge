@@ -151,6 +151,20 @@ export function loadConfig(env = process.env) {
     // How long after the push /clip waits before downloading a HomeBase 2 recording, so the station has
     // finished writing it. Set it at least to the camera's clip length. Default 30s.
     clipSettleMs: env.CLIP_SETTLE_MS != null ? Number(env.CLIP_SETTLE_MS) : 30_000,
+    // Save every recording a HomeBase 3 lists to this folder, as `<camera serial>/<YYYYMMDDTHHMMSSZ>.mp4`
+    // (UTC start time); see recording-archive.mjs. Unset: nothing is saved. The station lists only the
+    // current day's recordings, so recordings made while the bridge is down are saved only if it is back
+    // before the station's midnight.
+    recordingsDir: env.RECORDINGS_DIR || undefined,
+    // How often the station's list is read for new recordings. Default 2 min.
+    recordingsPollMs: positiveInt(env.RECORDINGS_POLL_MS) ?? 120_000,
+    // How long after a recording ends it is downloaded, so the station has finished writing it. Default 10 s.
+    recordingsSettleMs:
+      env.RECORDINGS_SETTLE_MS?.trim() === "0" ? 0 : (positiveInt(env.RECORDINGS_SETTLE_MS) ?? 10_000),
+    // Move saved recordings older than RECORDINGS_OLD_DAYS (default 30) from RECORDINGS_DIR to this folder,
+    // keeping each one's path inside it. Unset: recordings stay in RECORDINGS_DIR.
+    recordingsOldDir: env.RECORDINGS_OLD_DIR || undefined,
+    recordingsOldDays: positiveInt(env.RECORDINGS_OLD_DAYS) ?? 30,
     // Event pre-warm: the SDK can speculatively open a camera's P2P session on a high-intent event
     // (doorbell/person/pet/package) so a following live view starts instantly. OFF by default here — it
     // holds a battery camera's radio open for ~28s per event. Set BRIDGE_PREWARM=1 to pre-warm on the four
