@@ -582,6 +582,17 @@ that push, then keeps the clip until the next one. It answers 404 on a camera wi
 since the bridge started, and 502 with the SDK's `reason` when the download fails. An H.265 recording is
 muxed with the `hev1` tag.
 
+`GET /recordings/<sn>` lists a HomeBase 3 camera's recordings from the station's own
+`history_record_info` table, newest first:
+`{ "recordings": [{ "name": "20260101120041", "cipherId": 0, "start": "2026-01-01T18:00:41.000Z", "end": "…", "frames": 652, "trigger": 4 }] }`.
+The station answers that table read with the current day's rows only. `name` is the station-local
+`yyyyMMddHHmmss` stamp the recording is stored under; `start` and `end` are UTC; `trigger` is the row's
+`trigger_type` (2 motion, 4 person). `GET /recording/<sn>/<name>.mp4` downloads one recording by name and
+answers it as an mp4. Any recording still on the station can be fetched, not only today's. It answers 400
+for a name that is not a stamp, 404 for one the station no longer holds (`reason: "no-data"`), and 502 with
+the SDK's `reason` when the download fails. `?cipher=<id>` passes the `cipherId` the list gives, which a
+HomeBase 2 needs and a HomeBase 3 ignores.
+
 go2rtc (bundled) turns `/stream/<sn>` into RTSP / WebRTC / MSE / HLS, so the frontend never speaks the
 raw video protocol.
 
@@ -597,7 +608,7 @@ raw video protocol.
   (`CMD_INDOOR_PAN_CALIBRATION` 6017 / `CMD_OUTDOOR_PAN_CALIBRATION` 6251) is the notable one.
 - Guard / station security mode (arm home/away/disarm).
 - Per-device event subscription/filtering (events broadcast to all clients).
-- Audio / recording / timelapse.
+- Audio / timelapse.
 
 ### Live audio
 
