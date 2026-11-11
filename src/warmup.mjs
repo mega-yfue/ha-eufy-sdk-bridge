@@ -8,6 +8,7 @@ import { normalizePushImage } from "@mega-yfue/eufy-sdk";
 import path from "node:path";
 import { rosterEntry, firstJsonObject } from "./faces.mjs";
 import { storedThumbnailSeenAt } from "./stored-thumbnail.mjs";
+import { createStationSilenceGuard } from "./station-silence.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -44,6 +45,10 @@ const AUTOHEAL_COOLDOWN_MS = Number(process.env.EVENT_IMAGE_AUTOHEAL_COOLDOWN_MS
 // this point the reply says "not yet" and the refresh finishes in the background, nudging HA if an image
 // lands (ha-eufy-sdk#73).
 const FORCE_REFRESH_ANSWER_MS = Number(process.env.EVENT_IMAGE_FORCE_REFRESH_ANSWER_MS) || 10000;
+// A station that has answered the direct read and then leaves this many in a row unanswered, on a session
+// that still reports itself connected, has its P2P session reopened; if it stays silent for as many again,
+// the bridge exits for a clean restart (see station-silence.mjs). Env-tunable, 0 disables.
+const SILENT_READS = Number(process.env.EVENT_IMAGE_SILENT_READS ?? 3);
 
 export function createWarmup(ctx) {
   const { eufy, eventImageDir } = ctx;
@@ -145,10 +150,34 @@ export function createWarmup(ctx) {
   // station whose direct read merely dropped once never swaps to the older form.
   const directReadAnswered = new Set();
   // Per device, the latest-info crop path last seen, and per station, how many latest-info queries in a
-  // row went unanswered (a standalone camera answers neither form; it stops being asked after a few).
+  // row went unanswered. One that has answered keeps being asked: a T8200 can miss three in a row and
+  // answer the next. One that has not is asked at most every LATEST_INFO_RETRY_MS after three misses, never
+  // given up on: a T8200 silent for a while after the bridge (or the camera) restarts answers again later,
+  // and a station that never answers costs one read per interval.
   const latestInfoPath = new Map();
   const latestInfoSilent = new Map();
+  const latestInfoAnswered = new Set();
+  const latestInfoAskedAt = new Map();
   const LATEST_INFO_MAX_SILENT = 3;
+  const LATEST_INFO_RETRY_MS = Number(process.env.EVENT_IMAGE_LATEST_INFO_RETRY_MS) || 10 * 60_000;
+
+  const silenceGuard = createStationSilenceGuard({
+    threshold: Number.isFinite(SILENT_READS) ? SILENT_READS : 3,
+    recycle: async (stationSn) => {
+      await eufy.getP2pSessions().get(stationSn)?.close();
+      await eufy.connectStation(stationSn);
+      console.log(`[bridge] station ${stationSn} connection reopened`);
+    },
+    restart: () => process.exit(1),
+    log: (message) => console.error(message),
+  });
+
+  /** Whether a station silent on the direct read should be asked latest-info now. */
+  function latestInfoDue(stationSn) {
+    if (latestInfoAnswered.has(stationSn) || (latestInfoSilent.get(stationSn) ?? 0) < LATEST_INFO_MAX_SILENT)
+      return true;
+    return Date.now() - (latestInfoAskedAt.get(stationSn) ?? 0) >= LATEST_INFO_RETRY_MS;
+  }
 
   /**
    * The latest-info query (inner cmd **10013**, mChannel **0**), as eufy-security-client sends it. It
@@ -166,6 +195,7 @@ export function createWarmup(ctx) {
     let chunk = "";
     const onChunk = ({ text }) => (chunk += text);
     session.on("dbChunk", onChunk);
+    latestInfoAskedAt.set(stationSn, Date.now());
     session.queryDatabase("history_record_info", { accountId, innerCmd: 10013, channel: 0 });
     let obj;
     for (let i = 0; i < 20 && !Array.isArray(obj?.data); i++) {
@@ -176,10 +206,12 @@ export function createWarmup(ctx) {
 
     const entries = Array.isArray(obj?.data) ? obj.data : undefined;
     if (!entries) {
-      latestInfoSilent.set(stationSn, (latestInfoSilent.get(stationSn) ?? 0) + 1);
+      if (!latestInfoAnswered.has(stationSn))
+        latestInfoSilent.set(stationSn, (latestInfoSilent.get(stationSn) ?? 0) + 1);
       return undefined;
     }
     latestInfoSilent.delete(stationSn);
+    latestInfoAnswered.add(stationSn);
     const taken = [];
     for (const rec of entries) {
       const dsn = rec?.device_sn;
@@ -245,8 +277,9 @@ export function createWarmup(ctx) {
 
     let records = parsed?.data ?? firstJsonObject(chunk)?.data ?? [];
     let received = `raw ${chunk.length}B received`;
+    const answeredBefore = directReadAnswered.has(stationSn);
     if (chunk.length) directReadAnswered.add(stationSn);
-    else if (!directReadAnswered.has(stationSn) && (latestInfoSilent.get(stationSn) ?? 0) < LATEST_INFO_MAX_SILENT) {
+    else if (!directReadAnswered.has(stationSn) && latestInfoDue(stationSn)) {
       const latest = await queryLatestInfoCovers(session, accountId, stationSn);
       if (latest) [records, received] = [latest, undefined];
       else received += "; latest-info unanswered too";
@@ -255,6 +288,12 @@ export function createWarmup(ctx) {
       // Diagnostic: distinguish "response never arrived" (chunk empty) from "arrived but unparseable /
       // no data" (chunk large) so a recurring failure points straight at transport vs shape.
       ctx.eventLog?.(`history query: no records parsed (${received})`);
+    }
+    // A read lost because the session itself dropped is the SDK's to recover, so only reads on a session
+    // that still reports itself up are counted. Nothing is counted while a camera streams, so the reopen
+    // never cuts off a live view.
+    if (chunk.length || (session.isConnected && !ctx.state.streaming?.size)) {
+      await silenceGuard.noteRead(stationSn, { answered: chunk.length > 0, answeredBefore });
     }
     // Keep the newest record per device (max start_time), then take its crop path. Ties (or a firmware
     // that omits start_time) fall back to last-wins, matching the old behaviour for that degenerate case.
@@ -267,11 +306,15 @@ export function createWarmup(ctx) {
       if (!dsn) continue;
       const ts = recordTime(rec);
       const p = cropPathOf(rec);
-      const s = seen.get(dsn) ?? { count: 0, maxTs: -1, maxTsHasCrop: false };
+      const s = seen.get(dsn) ?? { count: 0, maxTs: -1, maxTsHasCrop: false, maxTsTrigger: undefined };
       s.count += 1;
       if (ts > s.maxTs) {
         s.maxTs = ts;
         s.maxTsHasCrop = Boolean(p);
+        // trigger_type on the newest record classifies it on HB3 (2=motion, 4=person). Kept even for a
+        // crop-less record (a person recording the station mode didn't push still carries it).
+        const tt = Number(rec?.trigger_type ?? rec?.payload?.trigger_type);
+        s.maxTsTrigger = Number.isFinite(tt) ? tt : undefined;
       }
       seen.set(dsn, s);
       if (!p) continue;
@@ -337,6 +380,35 @@ export function createWarmup(ctx) {
     if (prev && prev.equals(data)) return false;
     fs.writeFileSync(file, data);
     return true;
+  }
+
+  /**
+   * The `trigger_type` of a device's freshest `history_record_info` record, across its connected
+   * station(s), or `undefined` if nothing readable. Used by the night-vision person upgrade (#35): on
+   * HomeBase 3, `2` = motion recording, `4` = person recording. Reuses the cover-refresh DB read and is
+   * serialised against it.
+   */
+  function latestTriggerType(sn) {
+    return withDbLock(async () => {
+      if (!sn) return undefined;
+      try {
+        const sessions = stationSessions();
+        if (!sessions.size) return undefined;
+        const devs = await eufy.getDevices();
+        const accountId = await accountIdOf(devs);
+        let best = { ts: -1, trigger: undefined };
+        for (const [, session] of sessions) {
+          if (!session.isConnected) continue;
+          const { seen } = await queryStationCovers(session, accountId);
+          const s = seen?.get(sn);
+          if (s && s.maxTs > best.ts) best = { ts: s.maxTs, trigger: s.maxTsTrigger };
+        }
+        return best.trigger;
+      } catch (e) {
+        console.error(`[bridge] latestTriggerType for ${sn} failed: ${e?.message ?? e}`);
+        return undefined;
+      }
+    });
   }
 
   /**
@@ -646,5 +718,6 @@ export function createWarmup(ctx) {
     onDetectionRefresh: localEventRefresh ? onDetectionRefresh : noop,
     forceRefreshEventImage,
     autoHealEventImage: localEventRefresh ? autoHealEventImage : noop,
+    latestTriggerType,
   };
 }

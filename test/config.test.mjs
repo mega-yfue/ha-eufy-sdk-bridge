@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { loadConfig } from "../src/config.mjs";
+import { prewarmEventsFor, PREWARM_EVENTS } from "../src/client.mjs";
 
 const base = { EUFY_EMAIL: "x@y.z", EUFY_PASSWORD: "pw" };
 
@@ -27,10 +28,20 @@ test("TRANSCODE_WIDTH: 1280 by default, a custom width honoured, anything else k
   assert.equal(loadConfig({ ...base, TRANSCODE_WIDTH: "wide" }).cfg.transcodeWidth, undefined);
 });
 
-test("BRIDGE_PREWARM=1 turns pre-warm on (SDK default events)", () => {
+test("BRIDGE_PREWARM=1 turns pre-warm on", () => {
   assert.equal(loadConfig({ ...base, BRIDGE_PREWARM: "1" }).cfg.prewarm, true);
   assert.equal(loadConfig({ ...base, BRIDGE_PREWARM: "true" }).cfg.prewarm, true);
   assert.equal(loadConfig({ ...base, BRIDGE_PREWARM: "0" }).cfg.prewarm, false);
+  assert.equal(loadConfig(base).cfg.personFromRecord, false); // default off
+  assert.equal(loadConfig({ ...base, EUFY_PERSON_FROM_RECORD: "1" }).cfg.personFromRecord, true);
+});
+
+test("pre-warm on names the four high-intent events; off names none (#145)", () => {
+  // The SDK turns an undefined `prewarmEvents` into an empty set, so the bridge must list the events itself.
+  assert.deepEqual(prewarmEventsFor(true), ["doorbellPress", "personDetected", "petDetection", "packageDelivered"]);
+  assert.deepEqual(prewarmEventsFor(true), [...PREWARM_EVENTS]);
+  assert.deepEqual(prewarmEventsFor(false), []);
+  assert.notEqual(prewarmEventsFor(true), prewarmEventsFor(true)); // a fresh array per client, never the frozen list
 });
 
 test("FCM push store path is derived beside the session file", () => {
@@ -59,8 +70,31 @@ test("SOLIX_RETRY_BASE_MS / SOLIX_RETRY_MAX_MS: defaults and custom values", () 
   assert.equal(custom.retryMaxMs, 300_000);
 });
 
+test("go2rtc ports: 1984/8554/8555 by default, GO2RTC_*_PORT moves each", () => {
+  const def = loadConfig(base).cfg;
+  assert.deepEqual([def.go2rtcApiPort, def.go2rtcRtspPort, def.go2rtcWebrtcPort], [1984, 8554, 8555]);
+  const moved = loadConfig({
+    ...base,
+    GO2RTC_API_PORT: "11984",
+    GO2RTC_RTSP_PORT: "18554",
+    GO2RTC_WEBRTC_PORT: "18555",
+  }).cfg;
+  assert.deepEqual([moved.go2rtcApiPort, moved.go2rtcRtspPort, moved.go2rtcWebrtcPort], [11984, 18554, 18555]);
+  // Not a port → the default, never NaN in the YAML or the URL.
+  assert.equal(loadConfig({ ...base, GO2RTC_RTSP_PORT: "" }).cfg.go2rtcRtspPort, 8554);
+  assert.equal(loadConfig({ ...base, GO2RTC_RTSP_PORT: "rtsp" }).cfg.go2rtcRtspPort, 8554);
+});
+
 test("openudid is undefined by default and taken from BRIDGE_OPENUDID when set", () => {
   assert.equal(loadConfig(base).cfg.openudid, undefined); // → SDK derives from email
   assert.equal(loadConfig({ ...base, BRIDGE_OPENUDID: "abcd1234abcd1234" }).cfg.openudid, "abcd1234abcd1234");
   assert.equal(loadConfig({ ...base, BRIDGE_OPENUDID: "" }).cfg.openudid, undefined); // empty → default
+});
+
+test("STREAM_BATTERY_MAX_MS: a malformed value keeps the safety cap, 0 removes it", () => {
+  assert.equal(loadConfig(base).cfg.streamBatteryMaxMs, 600_000);
+  assert.equal(loadConfig({ ...base, STREAM_BATTERY_MAX_MS: "120000" }).cfg.streamBatteryMaxMs, 120_000);
+  assert.equal(loadConfig({ ...base, STREAM_BATTERY_MAX_MS: "0" }).cfg.streamBatteryMaxMs, 0);
+  assert.equal(loadConfig({ ...base, STREAM_BATTERY_MAX_MS: "ten minutes" }).cfg.streamBatteryMaxMs, 600_000);
+  assert.equal(loadConfig({ ...base, STREAM_BATTERY_MAX_MS: "-1" }).cfg.streamBatteryMaxMs, 600_000);
 });

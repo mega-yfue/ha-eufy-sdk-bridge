@@ -16,8 +16,10 @@ import fs from "node:fs";
 import { loadConfig } from "./src/config.mjs";
 import { checkWebRtcLibrary } from "./src/webrtc-check.mjs";
 import { installConsoleRedaction } from "./src/redact.mjs";
+import { installConsoleTimestamps } from "./src/log-time.mjs";
 import { loadBridgeId } from "./src/bridge-id.mjs";
 import { createState } from "./src/state.mjs";
+import { createActivity } from "./src/activity.mjs";
 import { createEufy } from "./src/client.mjs";
 import { createFaces } from "./src/faces.mjs";
 import { createDeviceView } from "./src/device-view.mjs";
@@ -34,6 +36,7 @@ import { closeStreamClients } from "./streams.mjs";
 
 // Before anything logs: no echoed credential reaches the console (see redact.mjs).
 installConsoleRedaction();
+if (/^(1|true|yes|on)$/i.test(process.env.LOG_TIMESTAMPS ?? "")) installConsoleTimestamps();
 const config = loadConfig();
 const { cfg, DEBUG, DEBUG_P2P, EVENT_LOG, eventImageDir } = config;
 
@@ -55,6 +58,12 @@ if (!cfg.email || !cfg.password) {
 const state = createState();
 const eufy = createEufy(config);
 const ctx = { ...config, eufy, state, bridgeId: loadBridgeId(cfg.bridgeIdFile) };
+
+// Per-device "last heard locally" clock: any inbound event stamps the device alive, so liveness can trust
+// local activity over the cloud `lastSeen` (which lies for devices that report locally, not to the cloud).
+const activity = createActivity();
+ctx.noteActivity = activity.noteActivity;
+ctx.heardMs = activity.heardMs;
 
 // Each factory reads its cross-module deps off ctx lazily, so this single merge is enough — nothing here
 // is called until login/handlers run, by which point ctx is complete.

@@ -21,6 +21,10 @@ Video is deliberately **not** on the WebSocket: the WS hands back a URL, and _co
 is what starts the camera — disconnecting is what stops it_. There is no "stream is running" flag to
 drift out of sync.
 
+Camera summaries advertise SDK-supported optical views and their stream, snapshot and go2rtc source
+identifiers. A secondary optic uses `?view=<view>` on the HTTP endpoints; the primary URLs stay unchanged.
+See [optical views](./docs/ws-protocol.md#optical-views) for selection, older-SDK behavior and per-view stills.
+
 ## Run it
 
 Pull the published image and run it (bundles the SDK + go2rtc):
@@ -77,3 +81,5 @@ npm run lint      # prettier --check .   (npm run format to fix)
 Every PR into `main` or `dev` runs the CI gate ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)):
 `npm ci` → lint → compile (`node --check` on each `.mjs`) → test. `main` is the public release line;
 `dev` is the development line (rolling `:dev` image).
+
+T8400/T8410 live feeds use a named raw H.264 ffmpeg input to avoid format-probe misidentification. Video remains copied with wall-clock timestamps (`#async`); other models retain automatic input detection. This does not transcode H.265 feeds.
