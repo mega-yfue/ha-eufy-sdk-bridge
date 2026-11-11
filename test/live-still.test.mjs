@@ -176,3 +176,18 @@ test("conversions never overlap: a keyframe due while one is running is skipped,
   await tap.idle();
   assert.equal(maxRunning, 1);
 });
+
+test("onSaved fires after the picture is written (Last screen refresh), and a failing listener is harmless", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "live-"));
+  let saved = 0;
+  const { tap } = tapInto(dir, {
+    onSaved: () => {
+      saved += 1;
+      throw new Error("listener broke");
+    },
+  });
+  tap.onChunk(H264_KEY);
+  assert.equal(await tap.flush(), true);
+  assert.equal(saved, 1);
+  assert.ok(fs.existsSync(path.join(dir, "last-live-CAM1.jpg")));
+});

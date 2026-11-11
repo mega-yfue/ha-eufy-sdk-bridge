@@ -123,6 +123,8 @@ Every device the account exposes. _(Requires `auth.state == "ok"`.)_
 - `model` is the T-code (e.g. `T8410`); `modelName` is the product display name (e.g. `Indoor Cam Pan & Tilt`).
 - `state` is a flat `{ property: value }` map of the device's **current** values; reading it schedules a background refresh, and semantic events (below) push changes between reads.
 - `stream` is present only on devices with live video (cameras/doorbells).
+- `lastScreen` is present on the same devices, on a bridge that serves `GET /last-screen/<sn>` and `screen.take`.
+  A host gates its "last screen" controls on it.
 - `streaming` (cameras/doorbells only) is `true` while a live P2P feed is actually open right now — the
   same signal the `streamState` event carries, so a frontend can seed a "Streaming" sensor from the list.
 - `power` (cameras/doorbells only) is `"battery"` or `"wired"`, decided the way the SDK decides it for its own
@@ -296,6 +298,19 @@ the crop. _(Requires auth.)_
 ```jsonc
 // →  { "id": 8, "cmd": "event.refresh", "sn": "EXAMPLE-CAM-0001" }
 // ←  { "id": 8, "ok": true, "changed": true }   // changed=false when no newer image is available yet
+```
+
+### `screen.take`
+
+Take a **fresh still from the camera now** and keep it as its **last screen** (`GET /last-screen/<sn>`,
+`/snapshot?mode=screen`), then broadcast `lastScreenUpdated`. Backs a manual "Take Screenshot" control.
+A battery camera is woken for it (10-20 s), so give the call a long timeout. The bridge never calls this
+on a timer; besides this command, only watching the camera live updates the last screen. On failure
+(no picture, not a camera) the previous last screen is kept and nothing is broadcast. _(Requires auth.)_
+
+```jsonc
+// →  { "id": 9, "cmd": "screen.take", "sn": "EXAMPLE-CAM-0001" }
+// ←  { "id": 9, "ok": true, "bytes": 48213 }
 ```
 
 ### `config.get` / `config.set`
@@ -501,12 +516,13 @@ and implements them; registration alone does not establish hardware support for 
 
 ### Endpoint reference
 
-| method + path        | returns                                                                                                     |
-| -------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `GET /healthz`       | `{ ok, schemaVersion, bridgeId, auth: { state }, streaming: [sn,…] }` — always available (even before auth) |
-| `GET /snapshot/<sn>` | a JPEG still (`image/jpeg`). _Requires auth._                                                               |
-| `GET /stream/<sn>`   | live Annex-B H.264/H.265 (`application/octet-stream`) — what go2rtc pulls. _Requires auth._                 |
-| `GET /clip/<sn>`     | the latest detection's HomeBase 2 recording (`video/mp4`). _Requires auth._                                 |
+| method + path           | returns                                                                                                             |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `GET /healthz`          | `{ ok, schemaVersion, bridgeId, auth: { state }, streaming: [sn,…] }` — always available (even before auth)         |
+| `GET /snapshot/<sn>`    | a JPEG still (`image/jpeg`). _Requires auth._                                                                       |
+| `GET /stream/<sn>`      | live Annex-B H.264/H.265 (`application/octet-stream`) — what go2rtc pulls. _Requires auth._                         |
+| `GET /clip/<sn>`        | the latest detection's HomeBase 2 recording (`video/mp4`). _Requires auth._                                         |
+| `GET /last-screen/<sn>` | the last picture someone watched live (`image/jpeg`, header `x-saved-at`); 404 until watched once. _Requires auth._ |
 
 **A primed `/stream` has no error status.** With `STREAM_INSTANT_START` on (the default) the bridge answers
 `200` at once for the primary view and sends the last live keyframe while the camera wakes. A failure
@@ -523,7 +539,16 @@ the automatic battery-capability policy, `?mode=stored` to avoid live acquisitio
 persisted imagery, or `?mode=live` to attempt live acquisition first while retaining stored/persisted
 fallback behavior. The mode applies only to that request and does not modify `SNAPSHOT_LIVE` or other
 bridge configuration. `mode=live` is an acquisition preference, not a guarantee that the returned
-JPEG came from the live attempt. Invalid, empty, or duplicate `mode` parameters return HTTP 400.
+JPEG came from the live attempt. `?mode=screen` answers with the **last screen** — the last picture
+someone watched live (`GET /last-screen/<sn>`) — even when a later event thumbnail exists, never waking
+the camera; a camera never watched falls back to the newest picture on disk, and 404 when there is none.
+Invalid, empty, or duplicate `mode` parameters return HTTP 400.
+
+**Last screen vs last event.** Two pictures are kept per camera: the last event thumbnail
+(`GET /event-image/<sn>`, refreshed on detections, broadcast as `eventImageUpdated`) and the last screen
+(`GET /last-screen/<sn>`, saved while a `/stream` runs — ~5 s in, every 30 s, and when it ends — broadcast as
+`{ "event": "lastScreenUpdated", "deviceSn": "…" }` after each save). Without a mode `/snapshot` serves
+whichever of the two is newer.
 
 `GET /clip/<sn>` downloads the recording the camera's latest push named, over the station's P2P session
 (the camera is not woken), and muxes it with ffmpeg. It waits until `CLIP_SETTLE_MS` has passed since
