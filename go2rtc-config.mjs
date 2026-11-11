@@ -3,7 +3,8 @@
 // go2rtc (bundled in the image) is the ONLY media-protocol code in this project: it pulls the bridge's
 // one HTTP Annex-B feed per camera and turns it into RTSP / WebRTC / MSE / HLS. Each camera becomes a
 // go2rtc stream sourced from `ffmpeg:<the bridge's /stream URL>#video=copy` — copy, not transcode, so
-// go2rtc only remuxes.
+// go2rtc only remuxes. The exception is a camera listed in TRANSCODE_H264, converted to H.264 for
+// consumers that cannot play the H.265 it sends.
 //
 // The file contains real serials, so it is gitignored and generated at startup.
 import { writeFile, mkdir } from "node:fs/promises";
@@ -13,6 +14,23 @@ import { dirname } from "node:path";
 // include camera/video). This matches what HA turns into a camera entity — using deviceClass here
 // would miss a camera the SDK downgrades to "other" for sitting behind a HomeBase (not direct P2P).
 const isCamera = (d) => Boolean(d.stream);
+
+// How a camera's video reaches go2rtc's consumers: copied, or converted to H.264 for the cameras listed in
+// TRANSCODE_H264 (config.mjs says why). The height is -2, not go2rtc's -1, because x264 needs even
+// dimensions and -1 can come out odd.
+//
+// The rate cap keeps a converted keyframe near the size the eufy cameras send themselves. Uncapped, x264
+// made about 1.8 Mbit/s of an S340's dusk picture, some 470 packets in a keyframe's second, and those
+// reached a browser over WebRTC with holes in them. go2rtc resends nothing, so the decoder waited for a
+// clean keyframe that never came and the picture froze about 3 s in. A camera sending H.264 itself makes
+// about 0.4 Mbit/s with keyframes of about 100 packets and loses none on the same link. Capped, the
+// converted S340 lost no packet in 45 s.
+const RATE_CAP = "#raw=-maxrate 1500k -bufsize 1000k";
+function videoParams(cfg, sn) {
+  if (!cfg.transcodeH264?.includes(sn)) return "#video=copy";
+  const size = cfg.transcodeWidth ? `#width=${cfg.transcodeWidth}#height=-2` : "";
+  return `#video=h264${size}${RATE_CAP}`;
+}
 
 export async function writeGo2rtcConfig(cfg, devices) {
   const cams = devices.filter(isCamera);
@@ -34,12 +52,14 @@ export async function writeGo2rtcConfig(cfg, devices) {
     // instead of trusting the camera's. The eufy feed starts at dts 0 and then jumps, which a consumer
     // reads as a broken stream: Home Assistant aborts with "Timestamp discontinuity detected: last dts =
     // 0, dts = 4219155056" seconds after the picture starts flowing. Re-stamping costs nothing here —
-    // the feed is remuxed, not transcoded, and a live view has no timeline to preserve.
+    // the feed is remuxed (or, for a listed camera, transcoded), and a live view has no timeline to preserve.
     // These indoor models supply raw H.264; probing can mistake it for MPEG audio/TS.
     // Use a named template: inline {input} is interpreted as a go2rtc source replacement.
     const input = ["T8400", "T8410"].includes(d.model) ? "#input=eufy_h264" : "";
+    // TRANSCODE_H264 names the physical camera, so every optical view it advertises is converted alike.
+    const video = videoParams(cfg, d.sn);
     for (const view of d.views ?? [{ id: d.sn, stream: d.stream }]) {
-      lines.push(`  ${view.id}: ffmpeg:http://${cfg.selfHost}:${cfg.port}${view.stream}#video=copy#async${input}`);
+      lines.push(`  ${view.id}: ffmpeg:http://${cfg.selfHost}:${cfg.port}${view.stream}${video}#async${input}`);
     }
   }
   const yaml = lines.join("\n") + "\n";
