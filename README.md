@@ -83,3 +83,18 @@ Every PR into `main` or `dev` runs the CI gate ([`.github/workflows/ci.yml`](./.
 `dev` is the development line (rolling `:dev` image).
 
 T8400/T8410 live feeds use a named raw H.264 ffmpeg input to avoid format-probe misidentification. Video remains copied with wall-clock timestamps (`#async`); other models retain automatic input detection. This does not transcode H.265 feeds.
+
+## NVR Full-HD output
+
+With an SDK route that advertises `camera.outputResolutions()`, each optical view also
+contains `outputs` descriptors for supported alternate output sizes. Full HD uses
+`outputResolution=1080p` on the HTTP stream/snapshot request and on the WebSocket
+`stream.start` request. Each alternate has a distinct go2rtc ID ending in
+`_output_1080p`; existing default IDs and URLs are preserved.
+
+This requests NVR output geometry through the SDK. It neither changes recording
+quality nor promises a separately identified physical-camera substream. Older SDK
+routes advertise no alternatives and reject an explicit unsupported request.
+Stored snapshots can retain an earlier image; the output-size choice applies when
+a live pull is opened. Concurrent default and Full-HD viewers can require separate
+NVR calls and remain subject to its media-call capacity.
