@@ -253,12 +253,17 @@ export function createWsServer(ctx, httpServer) {
         }
         case "stream.start": {
           const view = msg.view === undefined ? 0 : msg.view;
+          const outputResolution = msg.outputResolution;
+          if (outputResolution !== undefined && outputResolution !== "1080p")
+            throw new RangeError("unsupported output resolution");
           if (!validView(view)) throw new RangeError("view must be a non-negative safe integer");
-          if (msg.view !== undefined) {
+          if (msg.view !== undefined || outputResolution !== undefined) {
             const camera = (await eufy.getDevice(msg.sn)).camera?.();
             if (!camera || !cameraViews(camera).includes(view)) throw new RangeError("unsupported camera view");
+            if (outputResolution && !camera.outputResolutions?.().includes(outputResolution))
+              throw new RangeError("unsupported output resolution");
           }
-          const source = cameraView(msg.sn, view);
+          const source = cameraView(msg.sn, view, outputResolution);
           // Returns URLs; does NOT open the camera — the media connection does that.
           return reply({
             path: source.stream,
