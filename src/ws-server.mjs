@@ -146,10 +146,12 @@ export function createWsServer(ctx, httpServer) {
         case "device.set": {
           const t0 = Date.now();
           dbg(`device.set → setProperty sn=${msg.sn} name=${msg.name} value=${JSON.stringify(msg.value)}`);
+          ctx.armingConfirm?.sending(msg.sn, msg.name, msg.value);
           try {
             await eufy.setProperty(msg.sn, msg.name, msg.value);
             dbg(`device.set OK sn=${msg.sn} name=${msg.name} (${Date.now() - t0}ms)`);
           } catch (e) {
+            ctx.armingConfirm?.failed(msg.sn, msg.name);
             console.error(
               `[bridge] device.set FAILED sn=${msg.sn} name=${msg.name} (${Date.now() - t0}ms): ${e?.name ?? "Error"}: ${e?.message ?? e}`,
             );

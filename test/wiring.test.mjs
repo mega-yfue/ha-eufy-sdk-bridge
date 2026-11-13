@@ -306,3 +306,31 @@ test("ws: device.action reaches the ptz surface, bare verbs and dotted preset pa
 
   httpServer.close();
 });
+
+test("ws: device.set holds a mode write for confirmation before sending it, and drops it when the send fails", async () => {
+  const { ctx, state, httpServer } = buildCtx();
+  state.flags.ready = true;
+  const calls = [];
+  ctx.armingConfirm = {
+    sending: (sn, name, value) => calls.push(["sending", sn, name, value]),
+    failed: (sn, name) => calls.push(["failed", sn, name]),
+  };
+  ctx.eufy.setProperty = async (sn, name, value) => {
+    calls.push(["setProperty", sn, name, value]);
+    if (sn === "BAD1") throw new Error("not reachable");
+  };
+
+  const ok = await wsCall(ctx, { id: 1, cmd: "device.set", sn: "ST1", name: "armingMode", value: 1 });
+  assert.equal(ok[0].ok, true);
+  const bad = await wsCall(ctx, { id: 2, cmd: "device.set", sn: "BAD1", name: "armingMode", value: 1 });
+  assert.equal(bad[0].ok, false);
+  assert.deepEqual(calls, [
+    ["sending", "ST1", "armingMode", 1],
+    ["setProperty", "ST1", "armingMode", 1],
+    ["sending", "BAD1", "armingMode", 1],
+    ["setProperty", "BAD1", "armingMode", 1],
+    ["failed", "BAD1", "armingMode"],
+  ]);
+
+  httpServer.close();
+});
