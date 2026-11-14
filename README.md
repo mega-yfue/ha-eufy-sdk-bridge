@@ -38,6 +38,11 @@ docker run -d --name eufy-bridge --network host \
 
 or with Compose (`cp .env.example .env` first): `docker compose up -d`.
 
+> **Password with `#`, `$`, spaces or quotes?** Wrap it in single quotes in `.env`
+> (`EUFY_PASSWORD='pa#ss$word'`). Unquoted, Compose treats ` #` as the start of a comment and expands
+> `$NAME`. Double quotes still expand `$`. Either way the bridge gets a different password and the
+> login is rejected. Inside single quotes, write a literal `'` as `\'`.
+
 **Full deploy guide (alongside Home Assistant, config reference, first-run 2FA/captcha):**
 [docs/docker-compose.md](./docs/docker-compose.md) · **WS protocol:** [docs/ws-protocol.md](./docs/ws-protocol.md) ·
 **Troubleshooting:** [docs/troubleshooting.md](./docs/troubleshooting.md)
