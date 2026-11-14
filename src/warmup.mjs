@@ -81,6 +81,17 @@ export function createWarmup(ctx) {
     return new Map([...eufy.getP2pSessions()].filter(([key]) => !String(key).includes("#live:")));
   }
 
+  /**
+   * `sessions` as `[stationSn, session]` pairs with the device's own station first (the HomeBase it hangs off,
+   * or the device itself when it is its own station), then the rest in their usual order. A station that
+   * never answers the history read costs a full ~14 s wait, so asking the right one first matters.
+   */
+  function ownStationFirst(sessions, ownStation) {
+    const pairs = [...sessions];
+    if (!ownStation || !sessions.has(ownStation)) return pairs;
+    return [[ownStation, sessions.get(ownStation)], ...pairs.filter(([stationSn]) => stationSn !== ownStation)];
+  }
+
   /** Sessions come up asynchronously after login — wait (up to ~20s) for at least one to appear. */
   async function awaitSessions() {
     let sessions = stationSessions();
@@ -249,6 +260,9 @@ export function createWarmup(ctx) {
    * when this one comes back empty.
    *
    * Sent twice (the first can be dropped during handshake). Caller must hold the DB lock.
+   *
+   * `answered` says whether the station replied at all (to the direct read, or to latest-info), so a caller
+   * can tell a station that has no record for a device from one that said nothing.
    */
   async function queryStationCovers(session, accountId, stationSn) {
     let chunk = "";
@@ -277,17 +291,20 @@ export function createWarmup(ctx) {
 
     let records = parsed?.data ?? firstJsonObject(chunk)?.data ?? [];
     let received = `raw ${chunk.length}B received`;
+    let answered = chunk.length > 0;
     const answeredBefore = directReadAnswered.has(stationSn);
     if (chunk.length) directReadAnswered.add(stationSn);
     else if (!directReadAnswered.has(stationSn) && latestInfoDue(stationSn)) {
       const latest = await queryLatestInfoCovers(session, accountId, stationSn);
-      if (latest) [records, received] = [latest, undefined];
+      if (latest) [records, received, answered] = [latest, undefined, true];
       else received += "; latest-info unanswered too";
     }
     if (!records.length && received) {
       // Diagnostic: distinguish "response never arrived" (chunk empty) from "arrived but unparseable /
-      // no data" (chunk large) so a recurring failure points straight at transport vs shape.
-      ctx.eventLog?.(`history query: no records parsed (${received})`);
+      // no data" (chunk large) so a recurring failure points straight at transport vs shape. The station is
+      // named: a refresh reads several stations in turn, and one that never answers this read (a HomeBase 2,
+      // a standalone camera) otherwise looks the same as the device's own station going quiet.
+      ctx.eventLog?.(`history query: no records parsed (${received})${stationSn ? ` from ${stationSn}` : ""}`);
     }
     // A read lost because the session itself dropped is the SDK's to recover, so only reads on a session
     // that still reports itself up are counted. Nothing is counted while a camera streams, so the reopen
@@ -321,7 +338,7 @@ export function createWarmup(ctx) {
       const cur = newest.get(dsn);
       if (!cur || ts >= cur.ts) newest.set(dsn, { ts, path: p, rec });
     }
-    return { covers: newest, recordCount: records.length, seen };
+    return { covers: newest, recordCount: records.length, seen, answered };
   }
 
   /** A station's `p2p_did`, the key a stored image's `eufysecurity:` wrapper is decoded with. */
@@ -485,9 +502,10 @@ export function createWarmup(ctx) {
         if (!sessions.size) return false;
         const devs = await eufy.getDevices();
         const accountId = await accountIdOf(devs);
-        for (const [stationSn, session] of sessions) {
+        const ownStation = devs.find((d) => d.sn === sn)?.stationSn;
+        for (const [stationSn, session] of ownStationFirst(sessions, ownStation)) {
           if (!session.isConnected) continue;
-          const { covers, recordCount, seen } = await queryStationCovers(session, accountId, stationSn);
+          const { covers, recordCount, seen, answered } = await queryStationCovers(session, accountId, stationSn);
           const entry = covers.get(sn);
           if (!entry) {
             // Diagnostic: did this station return records for this device at all? If it has a newer record
@@ -499,6 +517,12 @@ export function createWarmup(ctx) {
                 `local refresh: ${sn} — no crop in its ${s.count} record(s) here ` +
                   `(newest ts=${s.maxTs}, hasCrop=${s.maxTsHasCrop}; ${recordCount} total)`,
               );
+            }
+            // The device's own station answered without a cover for it: its records live there and nowhere
+            // else, so reading the other stations would only wait out the ones that never answer.
+            if (stationSn === ownStation && answered) {
+              ctx.eventLog?.(`local refresh: ${sn} — no local cover found on its station ${ownStation}`);
+              return false;
             }
             continue; // this device isn't on this station — try the next
           }
