@@ -1,7 +1,9 @@
-// The generated go2rtc config is what every consumer ends up pulling, so its source line carries the
+// The generated go2rtc config is what every consumer ends up pulling, so its source lines carry the
 // flags that decide whether a stream is usable. `#async` re-stamps frames from the wall clock: without
 // it the eufy feed's own timestamps (dts 0, then a jump) make Home Assistant abort a picture that is
-// already flowing — "Timestamp discontinuity detected: last dts = 0, dts = 4219155056".
+// already flowing — "Timestamp discontinuity detected: last dts = 0, dts = 4219155056". Audio is read by
+// go2rtc itself: `ffmpeg:…#audio=copy` cannot write raw ADTS to RTSP ("AAC with no global headers"), and
+// a failed audio source takes the whole audio track with it.
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -29,7 +31,37 @@ async function generate(extra = {}, devices = cams) {
 test("every camera stream is generated with #async", async () => {
   const { yaml, sns } = await generate();
   assert.deepEqual(sns, ["CAM1"]);
-  assert.match(yaml, /CAM1: ffmpeg:http:\/\/127\.0\.0\.1:3000\/stream\/CAM1#video=copy#async/);
+  assert.match(yaml, /\n {2}CAM1:\n {4}- ffmpeg:http:\/\/127\.0\.0\.1:3000\/stream\/CAM1#video=copy#async\n/);
+});
+
+test("each camera's audio is read by go2rtc itself, with an Opus loopback for WebRTC", async () => {
+  const { yaml } = await generate();
+  assert.ok(
+    yaml.includes(
+      "#async\n    - http://127.0.0.1:3000/audio/CAM1\n    - ffmpeg:CAM1#audio=opus#raw=-af asetpts=N/SR/TB\n",
+    ),
+  );
+  assert.ok(!yaml.includes("audio=copy"), "an ffmpeg copy of raw ADTS fails on RTSP and loses the audio track");
+});
+
+test("secondary NVR audio and Opus loopback retain the advertised optical source", async () => {
+  const { yaml } = await generate({}, [
+    {
+      sn: "CAMERA_S4",
+      model: "T8E00",
+      name: "Driveway PoE S4",
+      deviceClass: "other",
+      stream: "/stream/CAMERA_S4",
+      views: [
+        { view: 1, id: "CAMERA_S4_view_1", stream: "/stream/CAMERA_S4?view=1", snapshot: "/snapshot/CAMERA_S4?view=1" },
+      ],
+    },
+  ]);
+  assert.ok(
+    yaml.includes(
+      "CAMERA_S4_view_1:\n    - ffmpeg:http://127.0.0.1:3000/stream/CAMERA_S4?view=1#video=copy#async\n    - http://127.0.0.1:3000/audio/CAMERA_S4?view=1\n    - ffmpeg:CAMERA_S4_view_1#audio=opus#raw=-af asetpts=N/SR/TB\n",
+    ),
+  );
 });
 
 test("a device without a stream path is left out", async () => {
@@ -73,10 +105,12 @@ test("known indoor H.264 feeds bypass format probing without transcoding or losi
   assert.deepEqual(sns, ["INDOOR1", "INDOOR2", "OTHER", "UNKNOWN"]);
   assert.ok(yaml.includes('ffmpeg:\n  eufy_h264: "-analyzeduration 0 -probesize 32768 -f h264 -i {input}"\n'));
   for (const sn of ["INDOOR1", "INDOOR2"]) {
-    assert.ok(yaml.includes(`${sn}: ffmpeg:http://127.0.0.1:3000/stream/${sn}#video=copy#async#input=eufy_h264\n`));
+    assert.ok(
+      yaml.includes(`${sn}:\n    - ffmpeg:http://127.0.0.1:3000/stream/${sn}#video=copy#async#input=eufy_h264\n`),
+    );
   }
   for (const sn of ["OTHER", "UNKNOWN"]) {
-    assert.ok(yaml.includes(`${sn}: ffmpeg:http://127.0.0.1:3000/stream/${sn}#video=copy#async\n`));
+    assert.ok(yaml.includes(`${sn}:\n    - ffmpeg:http://127.0.0.1:3000/stream/${sn}#video=copy#async\n`));
   }
 });
 
@@ -91,7 +125,7 @@ test("the input selection also preserves advertised optical-view paths", async (
   ]);
   assert.ok(
     yaml.includes(
-      "INDOOR_MAIN: ffmpeg:http://127.0.0.1:3000/stream/INDOOR?view=main#video=copy#async#input=eufy_h264\n",
+      "INDOOR_MAIN:\n    - ffmpeg:http://127.0.0.1:3000/stream/INDOOR?view=main#video=copy#async#input=eufy_h264\n",
     ),
   );
 });

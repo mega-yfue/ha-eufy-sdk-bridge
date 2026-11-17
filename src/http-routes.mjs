@@ -9,6 +9,7 @@ import { createLiveStillTap, keyframeCodec, lastLiveKeyframeFile } from "./live-
 import { liveFeedOpener } from "./live-feed.mjs";
 import { loadPrimer, startPrimer } from "./stream-primer.mjs";
 import { PLACEHOLDER_CODEC, PLACEHOLDER_KEYFRAME } from "./stream-placeholder.mjs";
+import { openAdts, isNoLiveAudio, ADTS_CONTENT_TYPE } from "./live-audio.mjs";
 import { onBatteryPower } from "./power.mjs";
 import { storedThumbnailSeenAt } from "./stored-thumbnail.mjs";
 import { redactSecrets } from "./redact.mjs";
@@ -197,7 +198,7 @@ export function createHttpHandler(ctx) {
     if (!flags.ready) return json(res, 503, { error: "not authenticated", auth: ctx.authStatus() });
 
     let view = 0;
-    if ((kind === "stream" || kind === "snapshot") && sn) {
+    if ((kind === "stream" || kind === "snapshot" || kind === "audio") && sn) {
       try {
         view = requestedView(url.searchParams);
       } catch (e) {
@@ -425,7 +426,7 @@ export function createHttpHandler(ctx) {
       return res.end(clip.mp4);
     }
 
-    if (kind === "stream" && sn) {
+    if ((kind === "stream" || kind === "audio") && sn) {
       noteStreamRequest(sn, req); // trace who is pulling this stream (incl. go2rtc's real consumers)
       if (cfg.streamIdleMs) lastPullAttempt.set(sn, Date.now()); // consumer is asking (watched vs. gone)
       // Idle-suspended: no detection recently, so don't reopen the P2P session. go2rtc's ffmpeg source
@@ -453,7 +454,7 @@ export function createHttpHandler(ctx) {
       // where live keyframes are kept — an H.265 camera recovers from the H.264 stand-in through that file.
       // Only the primary view: whether a secondary one exists is known once the camera answers, and that
       // answer must stay a 404 rather than a primed response.
-      const instant = cfg.streamInstantStart && view === 0;
+      const instant = kind === "stream" && cfg.streamInstantStart && view === 0;
       let primer = instant ? await loadPrimer(eventImageDir, sn) : null;
       if (!primer && instant && cfg.streamPlaceholder && eventImageDir)
         primer = { au: PLACEHOLDER_KEYFRAME, codec: PLACEHOLDER_CODEC, placeholder: true };
@@ -500,11 +501,14 @@ export function createHttpHandler(ctx) {
           const desc = dev.describe?.();
           const battery = desc ? onBatteryPower(desc.model, desc.capabilities) : true;
           const cam = dev.camera?.();
-          const openFeed = liveFeedOpener(
-            cam,
-            battery ? { onBudget: (notice) => void onStreamBudget(sn, notice, res) } : undefined,
-          );
-          if (!openFeed) return fail(404, { error: "no live video on this device" });
+          const openFeed =
+            kind === "audio"
+              ? cam?.live && (async (opts) => openAdts(await cam.live(opts)))
+              : liveFeedOpener(
+                  cam,
+                  battery ? { onBudget: (notice) => void onStreamBudget(sn, notice, res) } : undefined,
+                );
+          if (!openFeed) return fail(404, { error: `no live ${kind === "audio" ? "audio" : "video"} on this device` });
           if (!cameraViews(cam).includes(view)) return fail(404, { error: "unsupported camera view", view });
           if (gone) return stopPrimer?.(); // don't wake the camera for a viewer that already left
           // The battery budget only takes effect when this call opens the session, which it does: the stream
@@ -547,24 +551,30 @@ export function createHttpHandler(ctx) {
           activeStreams.set(sn, entry);
           rtspLastActive.set(sn, Date.now()); // a live stream counts as activity for the rtspStream auto-off
           if (!res.headersSent)
-            res.writeHead(200, { "content-type": "application/octet-stream", "cache-control": "no-cache" });
+            res.writeHead(200, {
+              "content-type": kind === "audio" ? ADTS_CONTENT_TYPE : "application/octet-stream",
+              "cache-control": "no-cache",
+            });
           res.write(first);
           feed.pipe(res);
           // Remember the stream's latest keyframe so the still can show what was last SEEN, not only the
           // last event — without ever waking the camera for it (see live-still.mjs).
-          const still = createLiveStillTap({
-            sn: source.id,
-            dir: eventImageDir,
-            log: ctx.eventLog ?? (() => {}),
-            onSaved: view === 0 ? () => ctx.broadcast?.({ event: "lastScreenUpdated", deviceSn: sn }) : undefined,
-          });
-          still.onChunk(first);
-          feed.on("data", still.onChunk);
+          const still =
+            kind === "stream"
+              ? createLiveStillTap({
+                  sn: source.id,
+                  dir: eventImageDir,
+                  log: ctx.eventLog ?? (() => {}),
+                  onSaved: view === 0 ? () => ctx.broadcast?.({ event: "lastScreenUpdated", deviceSn: sn }) : undefined,
+                })
+              : null;
+          still?.onChunk(first);
+          if (still) feed.on("data", still.onChunk);
           let cleanedUp = false;
           const cleanup = () => {
             if (cleanedUp) return;
             cleanedUp = true;
-            void still.flush();
+            void still?.flush();
             feed.destroy();
             // pipe() ends the response only on a clean end. A feed that failed (P2P drop, warm-up timeout) or
             // closed early would leave ffmpeg on an open, silent socket until its own timeout — abort the
@@ -590,6 +600,7 @@ export function createHttpHandler(ctx) {
           return;
         } catch (e) {
           feed?.destroy();
+          if (isNoLiveAudio(e)) return fail(404, { error: e.message });
           // Our client was dropped (or the bridge is shutting down) before its login finished: nothing was
           // opened and the camera did not fail, so neither arm the backoff nor drop the client that replaced it.
           if (isSupersededStreamClient(e)) return fail(503, { error: String(e?.message ?? e) });
