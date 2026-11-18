@@ -19,6 +19,12 @@ const NO_LIVE_AUDIO = "NO_LIVE_AUDIO";
 export const isNoLiveAudio = (e) => e?.code === NO_LIVE_AUDIO;
 
 /**
+ * True when that rejection is evidence the camera has no audio we can serve (it named another codec, or its
+ * video flowed without audio), not only that none arrived in time.
+ */
+export const isNoAudioEvidence = (e) => isNoLiveAudio(e) && (e.reason === "codec" || e.reason === "quiet");
+
+/**
  * Wait for a live() consumer's first `aac-lc` frame, then resolve with a Readable of ADTS bytes that starts
  * with it. Only `aac-lc` is served: its frames arrive ADTS-framed, so they concatenate into a valid .aac
  * stream, while `aac-eld` (raw access units) and `g711a` would need framing of their own.
@@ -61,16 +67,17 @@ export function openAdts(handle, { quietMs = 3000, timeoutMs = 20000 } = {}) {
       stop();
       reject(err);
     };
-    const giveUp = (why) => fail(Object.assign(new Error(`no live audio: ${why}`), { code: NO_LIVE_AUDIO }));
-    const overall = setTimeout(() => giveUp(`nothing arrived within ${timeoutMs} ms`), timeoutMs);
+    const giveUp = (why, reason) =>
+      fail(Object.assign(new Error(`no live audio: ${why}`), { code: NO_LIVE_AUDIO, reason }));
+    const overall = setTimeout(() => giveUp(`nothing arrived within ${timeoutMs} ms`, "timeout"), timeoutMs);
     function onVideo() {
-      quiet ??= setTimeout(() => giveUp(`video arrived, but no audio within ${quietMs} ms`), quietMs);
+      quiet ??= setTimeout(() => giveUp(`video arrived, but no audio within ${quietMs} ms`, "quiet"), quietMs);
     }
     handle.on("video", onVideo);
     handle.on("audio", (frame) => {
       if (frame.codec !== "aac-lc") {
         // Before the response starts this decides it; afterwards a frame we can't serve is skipped.
-        giveUp(`the camera sends ${frame.codec}; only ADTS-framed aac-lc is served`);
+        giveUp(`the camera sends ${frame.codec}; only ADTS-framed aac-lc is served`, "codec");
         return;
       }
       out.push(frame.data);
@@ -79,7 +86,7 @@ export function openAdts(handle, { quietMs = 3000, timeoutMs = 20000 } = {}) {
       resolve(out);
     });
     // Upstream ended: EOF once the response is under way, "no audio" before it.
-    handle.on("stop", () => (settled ? out.push(null) : giveUp("the stream stopped before any audio")));
+    handle.on("stop", () => (settled ? out.push(null) : giveUp("the stream stopped before any audio", "stopped")));
     handle.on("error", (err) => {
       if (settled) out.destroy(err);
       else fail(err);
