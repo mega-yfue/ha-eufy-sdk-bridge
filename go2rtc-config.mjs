@@ -39,7 +39,12 @@ export async function writeGo2rtcConfig(cfg, devices) {
     // Use a named template: inline {input} is interpreted as a go2rtc source replacement.
     const input = ["T8400", "T8410"].includes(d.model) ? "#input=eufy_h264" : "";
     for (const view of d.views ?? [{ id: d.sn, stream: d.stream }]) {
-      lines.push(`  ${view.id}: ffmpeg:http://${cfg.selfHost}:${cfg.port}${view.stream}#video=copy#async${input}`);
+      const base = `http://${cfg.selfHost}:${cfg.port}`;
+      const audioPath = view.stream.replace(/^\/stream\//, "/audio/");
+      lines.push(`  ${view.id}:`);
+      lines.push(`    - ffmpeg:${base}${view.stream}#video=copy#async${input}`);
+      lines.push(`    - ${base}${audioPath}`);
+      lines.push(`    - ffmpeg:${view.id}#audio=opus#raw=-af asetpts=N/SR/TB`);
     }
   }
   const yaml = lines.join("\n") + "\n";

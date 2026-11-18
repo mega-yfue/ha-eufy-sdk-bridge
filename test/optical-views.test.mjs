@@ -168,8 +168,8 @@ test("go2rtc registers each advertised view without replacing the primary source
   const file = path.join(h.dir, "go2rtc.yaml");
   await writeGo2rtcConfig({ go2rtcConfig: file, selfHost: "127.0.0.1", port: 3000 }, devices);
   const yaml = await fs.readFile(file, "utf8");
-  assert.ok(yaml.includes(`${SN}: ffmpeg:http://127.0.0.1:3000/stream/${SN}#video=copy#async`));
-  assert.ok(yaml.includes(`${SN}_view_1: ffmpeg:http://127.0.0.1:3000/stream/${SN}?view=1#video=copy#async`));
+  assert.ok(yaml.includes(`${SN}:\n    - ffmpeg:http://127.0.0.1:3000/stream/${SN}#video=copy#async`));
+  assert.ok(yaml.includes(`${SN}_view_1:\n    - ffmpeg:http://127.0.0.1:3000/stream/${SN}?view=1#video=copy#async`));
 });
 
 test("stream.start selects an advertised view and returns URLs without opening video", async (t) => {
@@ -312,5 +312,7 @@ test("selected optical sources retain configured go2rtc ports", async (t) => {
   await writeGo2rtcConfig({ ...h.ctx.cfg, go2rtcConfig: file }, (await h.ws("devices.list")).devices);
   const yaml = await fs.readFile(file, "utf8");
   for (const port of [11984, 18554, 18555]) assert.ok(yaml.includes(`listen: ":${port}"`));
-  assert.ok(yaml.includes(`${SN}_view_1: ffmpeg:http://${h.ctx.cfg.selfHost}:${h.ctx.cfg.port}/stream/${SN}?view=1`));
+  assert.ok(
+    yaml.includes(`${SN}_view_1:\n    - ffmpeg:http://${h.ctx.cfg.selfHost}:${h.ctx.cfg.port}/stream/${SN}?view=1`),
+  );
 });

@@ -516,13 +516,14 @@ and implements them; registration alone does not establish hardware support for 
 
 ### Endpoint reference
 
-| method + path           | returns                                                                                                             |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `GET /healthz`          | `{ ok, schemaVersion, bridgeId, auth: { state }, streaming: [sn,…] }` — always available (even before auth)         |
-| `GET /snapshot/<sn>`    | a JPEG still (`image/jpeg`). _Requires auth._                                                                       |
-| `GET /stream/<sn>`      | live Annex-B H.264/H.265 (`application/octet-stream`) — what go2rtc pulls. _Requires auth._                         |
-| `GET /clip/<sn>`        | the latest detection's HomeBase 2 recording (`video/mp4`). _Requires auth._                                         |
-| `GET /last-screen/<sn>` | the last picture someone watched live (`image/jpeg`, header `x-saved-at`); 404 until watched once. _Requires auth._ |
+| method + path           | returns                                                                                                              |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `GET /healthz`          | `{ ok, schemaVersion, bridgeId, auth: { state }, streaming: [sn,…] }` — always available (even before auth)          |
+| `GET /snapshot/<sn>`    | a JPEG still (`image/jpeg`). _Requires auth._                                                                        |
+| `GET /stream/<sn>`      | live Annex-B H.264/H.265 (`application/octet-stream`) — what go2rtc pulls. _Requires auth._                          |
+| `GET /audio/<sn>`       | live ADTS AAC-LC (`audio/aac`); `?view=` selects the same advertised optic as video. No supported audio returns 404. |
+| `GET /clip/<sn>`        | the latest detection's HomeBase 2 recording (`video/mp4`). _Requires auth._                                          |
+| `GET /last-screen/<sn>` | the last picture someone watched live (`image/jpeg`, header `x-saved-at`); 404 until watched once. _Requires auth._  |
 
 **A primed `/stream` has no error status.** With `STREAM_INSTANT_START` on (the default) the bridge answers
 `200` at once for the primary view and sends the last live keyframe while the camera wakes. A failure
@@ -572,3 +573,7 @@ raw video protocol.
 - Guard / station security mode (arm home/away/disarm).
 - Per-device event subscription/filtering (events broadcast to all clients).
 - Audio / recording / timelapse.
+
+### Live audio
+
+`/audio/<sn>` joins the shared SDK live source. It serves AAC-LC only; other audio codecs and a video stream without audio receive 404 without arming video backoff. The first supported frame may take up to 20 seconds, so cold-start RTSP timing must be qualified independently of a successful audio-only decode. Audio is not video and never updates the kept picture.
