@@ -431,11 +431,17 @@ Each carries the SDK's event payload (typically `deviceSn` / `stationSn` plus ev
 `propertyChanged` carries `deviceSn`, `property`, and, when available, the new `value`.
 If `value` is absent, consumers should re-read state rather than inventing a value.
 
+`armingModeChanged` carries `deviceSn` and, when the station's mode can be read, `mode`: the guard mode it
+switched to, as the wire integer `device.state` reports for `armingMode` (`0` away, `1` home, `63` disarmed,
+…). The SDK's own event has no value; the bridge reads it back from the device. If `mode` is absent, re-read
+state.
+
 ```json
 { "event": "motion", "deviceSn": "EXAMPLE-CAM…", "stationSn": "EXAMPLE-HB…" }
 { "event": "contactState", "deviceSn": "EXAMPLE-SENSOR…", "open": true }
 { "event": "batteryLevel", "deviceSn": "EXAMPLE-CAM…", "to": "74" }
 { "event": "doorbellPress", "deviceSn": "EXAMPLE-DOORBELL…" }
+{ "event": "armingModeChanged", "deviceSn": "EXAMPLE-HB…", "mode": 63 }
 ```
 
 Full set: `propertyChanged`, `motion`, `personDetected`, `strangerDetected`, `doorbellPress`, `petDetection`,

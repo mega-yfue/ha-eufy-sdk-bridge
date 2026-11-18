@@ -7,6 +7,7 @@ import { writeGo2rtcConfig } from "../go2rtc-config.mjs";
 import { pushFieldSummary } from "./push-trace.mjs";
 import { createArmingConfirm } from "./arming-confirm.mjs";
 import { RECORD_TRIGGER_PERSON } from "./config.mjs";
+import { withArmingMode } from "./arming-mode.mjs";
 
 // #35 night-vision upgrade timings. The person classification of a recording lands a few seconds after
 // the motion push, so wait before reading the record; dedup a real person push for the same device.
@@ -144,7 +145,9 @@ export function createBoot(ctx) {
                 `${clients === 0 ? " (NONE CONNECTED — HA will not update)" : ""}`,
             );
           }
-          ctx.broadcast({ event: e, ...ctx.enrichPersonName(e, payload) });
+          if (e === "armingModeChanged")
+            void withArmingMode(eufy, payload).then((p) => ctx.broadcast({ event: e, ...p }));
+          else ctx.broadcast({ event: e, ...ctx.enrichPersonName(e, payload) });
         });
       // Use the same capability-based view the WS/HA side uses: a camera is a device describeDevice gave
       // a `stream`, NOT deviceClass==="camera" (the SDK downgrades a camera behind a HomeBase to "other"),
