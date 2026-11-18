@@ -70,10 +70,15 @@ services:
 
 ```dotenv
 EUFY_EMAIL=you@example.com
-EUFY_PASSWORD=your-password
+EUFY_PASSWORD='your-password'
 EUFY_COUNTRY=GB
 BRIDGE_PORT=3000
 ```
+
+Keep the single quotes around `EUFY_PASSWORD`. Compose reads an unquoted ` #` as an inline comment and
+expands `$NAME` in unquoted or double-quoted values, so a password with `#`, `$`, spaces or quotes
+reaches the bridge changed and the login fails. A single-quoted value is passed through as-is. Write a
+literal `'` inside it as `\'`.
 
 ```bash
 docker compose up -d
