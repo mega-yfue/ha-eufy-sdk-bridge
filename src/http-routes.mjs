@@ -9,7 +9,16 @@ import { createLiveStillTap, keyframeCodec, lastLiveKeyframeFile } from "./live-
 import { liveFeedOpener } from "./live-feed.mjs";
 import { loadPrimer, startPrimer } from "./stream-primer.mjs";
 import { PLACEHOLDER_CODEC, PLACEHOLDER_KEYFRAME } from "./stream-placeholder.mjs";
-import { openAdts, isNoLiveAudio, ADTS_CONTENT_TYPE } from "./live-audio.mjs";
+import { openAdts, isNoLiveAudio, isNoAudioEvidence, ADTS_CONTENT_TYPE } from "./live-audio.mjs";
+import {
+  loadAudioFormat,
+  saveAudioFormat,
+  forgetAudioFormat,
+  startAudioPrimer,
+  adtsFormat,
+  sameAdtsFormat,
+  describeAdtsFormat,
+} from "./audio-primer.mjs";
 import { onBatteryPower } from "./power.mjs";
 import { storedThumbnailSeenAt } from "./stored-thumbnail.mjs";
 import { redactSecrets } from "./redact.mjs";
@@ -466,6 +475,21 @@ export function createHttpHandler(ctx) {
           `/stream ${sn} → answered at once with ${primer.placeholder ? "a stand-in picture (no live picture kept yet)" : "the last live picture"} (${primer.au.length}B, ${primer.codec}) while the camera wakes`,
         );
       }
+      // /audio answers at once too, with silence in the camera's last live audio format, so a waking camera
+      // does not hold the consumer's DESCRIBE on the audio source (see audio-primer.mjs). A camera whose audio
+      // was never heard here starts the old way: waiting for its first frame, or a 404 when it has none.
+      // Primary view only, as above.
+      const audioFormat =
+        kind === "audio" && cfg.streamInstantStart && view === 0
+          ? await loadAudioFormat(eventImageDir, source.id)
+          : null;
+      if (audioFormat && !gone) {
+        res.writeHead(200, { "content-type": ADTS_CONTENT_TYPE, "cache-control": "no-cache" });
+        stopPrimer = startAudioPrimer(res, audioFormat).stop;
+        ctx.eventLog?.(
+          `/audio ${sn} → answered at once with silence (${describeAdtsFormat(audioFormat)}, the last live format) while the camera wakes`,
+        );
+      }
       // An answer once the stream is primed can no longer be a status code: end the response instead, so
       // ffmpeg sees the stream end and go2rtc reconnects.
       const fail = (code, body) => {
@@ -540,6 +564,23 @@ export function createHttpHandler(ctx) {
             res.destroy();
             return;
           }
+          // Keep the live audio's format for the next cold start. Silence in another format cannot be followed
+          // in this response (go2rtc fixed its codec on it): end it, and go2rtc reconnects with the right one.
+          if (kind === "audio") {
+            const liveFormat = adtsFormat(first);
+            if (!sameAdtsFormat(audioFormat, liveFormat))
+              await (liveFormat
+                ? saveAudioFormat(eventImageDir, source.id, liveFormat)
+                : forgetAudioFormat(eventImageDir, source.id));
+            if (audioFormat && !sameAdtsFormat(audioFormat, liveFormat)) {
+              ctx.eventLog?.(
+                `/audio ${sn} → live audio is ${liveFormat ? describeAdtsFormat(liveFormat) : "not ADTS"}, not the silence's ${describeAdtsFormat(audioFormat)} — reconnecting with it`,
+              );
+              feed.destroy();
+              res.destroy();
+              return;
+            }
+          }
           ctx.noteStreamOpened?.(sn); // reachable again → clear any failure backoff
           let feeds = openFeeds.get(sn);
           if (!feeds) openFeeds.set(sn, (feeds = new Set()));
@@ -600,7 +641,11 @@ export function createHttpHandler(ctx) {
           return;
         } catch (e) {
           feed?.destroy();
-          if (isNoLiveAudio(e)) return fail(404, { error: e.message });
+          if (isNoLiveAudio(e)) {
+            // A camera shown to have no audio we serve starts unprimed next time, so it can answer 404.
+            if (isNoAudioEvidence(e)) await forgetAudioFormat(eventImageDir, source.id);
+            return fail(404, { error: e.message });
+          }
           // Our client was dropped (or the bridge is shutting down) before its login finished: nothing was
           // opened and the camera did not fail, so neither arm the backoff nor drop the client that replaced it.
           if (isSupersededStreamClient(e)) return fail(503, { error: String(e?.message ?? e) });
