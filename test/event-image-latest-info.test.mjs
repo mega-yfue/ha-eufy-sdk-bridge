@@ -155,7 +155,7 @@ test("a station silent on both forms is not asked latest-info again straight aft
 
   for (let i = 0; i < 5; i++) await run(() => warm.refreshLastEventImageFor("CAM1"));
   assert.equal(station.asked.filter((a) => a === "10013@0").length, 3);
-  assert.ok(log.includes("history query: no records parsed (raw 0B received; latest-info unanswered too)"));
+  assert.ok(log.includes("history query: no records parsed (raw 0B received; latest-info unanswered too) from HB2"));
 });
 
 test("a station that has never answered is asked latest-info again after the retry interval", async () => {
