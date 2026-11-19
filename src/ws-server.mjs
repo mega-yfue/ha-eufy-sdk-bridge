@@ -39,12 +39,23 @@ export function createWsServer(ctx, httpServer) {
     for (const ws of clients) if (ws.readyState === ws.OPEN) ws.send(s);
   };
 
-  // The device as seen through the session of a /stream that is live for it, or null when none is.
-  const liveDeviceFor = async (sn) => {
+  // The client behind a /stream that is live for this camera, or null when none is (or its login failed).
+  const liveClientFor = async (sn) => {
     const lease = ctx.state.activeStreams?.get(sn)?.lease;
     if (!lease) return null;
     try {
-      return await (await lease).getDevice(sn);
+      return await lease;
+    } catch {
+      return null; // that session failed meanwhile: the control client takes the command
+    }
+  };
+
+  // The device as seen through the session of a /stream that is live for it, or null when none is.
+  const liveDeviceFor = async (sn) => {
+    const live = await liveClientFor(sn);
+    if (!live) return null;
+    try {
+      return await live.getDevice(sn);
     } catch {
       return null; // that session failed meanwhile: the control client takes the command
     }
@@ -145,15 +156,22 @@ export function createWsServer(ctx, httpServer) {
         }
         case "device.set": {
           const t0 = Date.now();
-          dbg(`device.set → setProperty sn=${msg.sn} name=${msg.name} value=${JSON.stringify(msg.value)}`);
+          // A write to a camera that is streaming goes through the stream's own P2P session, as a PTZ command
+          // does (see device.action): that session is connected and has the camera awake, while the control
+          // client's session to a battery camera has usually dropped or the camera slept. Some properties are
+          // also tied to the streaming session itself — a camera's spotlight lights for the client that streams.
+          const liveClient = await liveClientFor(msg.sn);
+          const live = typeof liveClient?.setProperty === "function" ? liveClient : null;
+          const via = live ? " via the live stream's session" : "";
+          dbg(`device.set → setProperty sn=${msg.sn} name=${msg.name} value=${JSON.stringify(msg.value)}${via}`);
           ctx.armingConfirm?.sending(msg.sn, msg.name, msg.value);
           try {
-            await eufy.setProperty(msg.sn, msg.name, msg.value);
-            dbg(`device.set OK sn=${msg.sn} name=${msg.name} (${Date.now() - t0}ms)`);
+            await (live ?? eufy).setProperty(msg.sn, msg.name, msg.value);
+            dbg(`device.set OK sn=${msg.sn} name=${msg.name} (${Date.now() - t0}ms)${via}`);
           } catch (e) {
             ctx.armingConfirm?.failed(msg.sn, msg.name);
             console.error(
-              `[bridge] device.set FAILED sn=${msg.sn} name=${msg.name} (${Date.now() - t0}ms): ${e?.name ?? "Error"}: ${e?.message ?? e}`,
+              `[bridge] device.set FAILED sn=${msg.sn} name=${msg.name} (${Date.now() - t0}ms)${via}: ${e?.name ?? "Error"}: ${e?.message ?? e}`,
             );
             throw e; // outer catch surfaces it to the frontend (+ triggers session recovery if kicked)
           }
