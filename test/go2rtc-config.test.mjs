@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { parse } from "yaml";
 
 import { writeGo2rtcConfig } from "../go2rtc-config.mjs";
 import { loadConfig } from "../src/config.mjs";
@@ -28,6 +29,61 @@ async function generate(extra = {}, devices = cams) {
   return { yaml: fs.readFileSync(file, "utf8"), sns };
 }
 
+function savedConfig(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "go2rtc-discovery-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return { selfHost: "127.0.0.1", port: 3000, go2rtcConfig: path.join(dir, "go2rtc.yaml") };
+}
+
+test("partial discovery preserves the saved camera's complete audio and optical-view sources", async (t) => {
+  const cfg = savedConfig(t);
+  await writeGo2rtcConfig(cfg, [
+    {
+      sn: "SAVED",
+      model: "T8410",
+      stream: "/stream/SAVED",
+      views: [{ id: "SAVED_view_1", stream: "/stream/SAVED?view=1" }],
+    },
+  ]);
+  const before = parse(fs.readFileSync(cfg.go2rtcConfig, "utf8")).streams.SAVED_view_1;
+
+  await writeGo2rtcConfig(cfg, [{ sn: "LATE", stream: "/stream/LATE" }]);
+
+  const after = parse(fs.readFileSync(cfg.go2rtcConfig, "utf8"));
+  assert.deepEqual(after.streams.SAVED_view_1, before);
+  assert.equal(after.streams.LATE.length, 3);
+});
+
+test("an empty discovery preserves previously generated streams", async (t) => {
+  const cfg = savedConfig(t);
+  await writeGo2rtcConfig(cfg, cams);
+  const before = parse(fs.readFileSync(cfg.go2rtcConfig, "utf8")).streams;
+
+  await writeGo2rtcConfig(cfg, []);
+
+  assert.deepEqual(parse(fs.readFileSync(cfg.go2rtcConfig, "utf8")).streams, before);
+});
+
+test("legacy inline streams survive discovery of a different camera", async (t) => {
+  const cfg = savedConfig(t);
+  const legacy = "ffmpeg:http://127.0.0.1:3000/stream/LEGACY#video=copy";
+  fs.writeFileSync(cfg.go2rtcConfig, `streams:\n  LEGACY: ${legacy}\n`);
+
+  await writeGo2rtcConfig(cfg, [{ sn: "LATE", stream: "/stream/LATE" }]);
+
+  assert.equal(parse(fs.readFileSync(cfg.go2rtcConfig, "utf8")).streams.LEGACY, legacy);
+});
+
+test("an unreadable saved registry is reported without overwriting its contents", async (t) => {
+  const cfg = savedConfig(t);
+  const broken = "streams: [unterminated\n";
+  fs.writeFileSync(cfg.go2rtcConfig, broken);
+
+  await assert.rejects(writeGo2rtcConfig(cfg, cams));
+
+  assert.equal(fs.readFileSync(cfg.go2rtcConfig, "utf8"), broken);
+});
+
 test("every camera stream is generated with #async", async () => {
   const { yaml, sns } = await generate();
   assert.deepEqual(sns, ["CAM1"]);
@@ -38,9 +94,10 @@ test("each camera's audio is read by go2rtc itself, with an Opus loopback for We
   const { yaml } = await generate();
   assert.ok(
     yaml.includes(
-      "#async\n    - http://127.0.0.1:3000/audio/CAM1\n    - ffmpeg:CAM1#audio=opus#raw=-af asetpts=N/SR/TB\n",
+      "#async\n    - http://127.0.0.1:3000/audio/CAM1\n    - ffmpeg:CAM1#audio=opus#raw=eufy_audio_timestamps\n",
     ),
   );
+  assert.equal(parse(yaml).ffmpeg.eufy_audio_timestamps, "-af asetpts=N/SR/TB");
   assert.ok(!yaml.includes("audio=copy"), "an ffmpeg copy of raw ADTS fails on RTSP and loses the audio track");
 });
 
@@ -59,7 +116,7 @@ test("secondary NVR audio and Opus loopback retain the advertised optical source
   ]);
   assert.ok(
     yaml.includes(
-      "CAMERA_S4_view_1:\n    - ffmpeg:http://127.0.0.1:3000/stream/CAMERA_S4?view=1#video=copy#async\n    - http://127.0.0.1:3000/audio/CAMERA_S4?view=1\n    - ffmpeg:CAMERA_S4_view_1#audio=opus#raw=-af asetpts=N/SR/TB\n",
+      "CAMERA_S4_view_1:\n    - ffmpeg:http://127.0.0.1:3000/stream/CAMERA_S4?view=1#video=copy#async\n    - http://127.0.0.1:3000/audio/CAMERA_S4?view=1\n    - ffmpeg:CAMERA_S4_view_1#audio=opus#raw=eufy_audio_timestamps\n",
     ),
   );
 });

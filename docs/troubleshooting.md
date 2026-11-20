@@ -10,6 +10,7 @@ option / Docker env var**. If your problem isn't here, see
 - [A change reports OK but the camera ignores it, or live view never starts](#a-change-reports-ok-but-the-camera-ignores-it-or-live-view-never-starts)
 - [The bridge or the eufy app keeps getting logged out](#the-bridge-or-the-eufy-app-keeps-getting-logged-out)
 - [Login works but no devices show up](#login-works-but-no-devices-show-up)
+- [A camera appears in the device list but its RTSP URL returns 404](#a-camera-appears-in-the-device-list-but-its-rtsp-url-returns-404)
 - [eufy keeps emailing verification codes](#eufy-keeps-emailing-verification-codes)
 - [The bridge is connected but no events arrive](#the-bridge-is-connected-but-no-events-arrive)
 - [Live view takes a while to start on a battery camera](#live-view-takes-a-while-to-start-on-a-battery-camera)
@@ -21,6 +22,23 @@ services → Entities → the camera → ⚙ settings). With it on, Home Assista
 permanently and reopens it whenever it closes, so a battery camera wakes up over and over. Turn it
 off for battery cameras. The next release of the integration raises a Repairs warning, with a
 one-click fix, when a battery camera has it on.
+
+## A camera appears in the device list but its RTSP URL returns 404
+
+Discovery can still be incomplete when login finishes. The bridge keeps saved go2rtc sources across
+partial or empty discoveries and checks every 30 seconds for cameras learned later. Registration adds
+metadata to the bundled go2rtc; the camera starts streaming when a viewer connects. Existing sources
+retain their consumers while new sources are added. Video, audio and each SDK-advertised optical view
+are registered together, using the configured go2rtc API port.
+
+A missing discovery entry does not delete a saved source. A confirmed SDK `deviceRemoved` event removes
+that camera and its numbered views from the runtime and saved registry. If a camera was removed while
+the bridge was offline, remove its obsolete sources through go2rtc's API after confirming the camera
+is absent from the account. A source still advertised by discovery will be registered again.
+
+This reconciliation manages the bundled go2rtc process. An external instance used with
+`GO2RTC_ENABLE=0` keeps its own configuration lifecycle. If an API request fails, the bridge logs
+`go2rtc registry` and retries on the next sweep; check that `GO2RTC_API_PORT` reaches the bundled process.
 
 ## A watched battery-camera stream drops about every minute
 
