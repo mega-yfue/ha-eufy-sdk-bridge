@@ -16,7 +16,7 @@ const isCamera = (d) => Boolean(d.stream);
 
 // Models whose raw feed codec is known, so ffmpeg is told the format instead of probing for it.
 const H264_MODELS = ["T8400", "T8410"];
-const HEVC_MODELS = ["T8170", "T8530"]; // SoloCam S340; Video Smart Lock S330 (both verified HEVC Annex-B)
+const HEVC_MODELS = ["T8170"]; // SoloCam S340 (verified HEVC Annex-B)
 
 export async function writeGo2rtcConfig(cfg, devices) {
   const cams = devices.filter(isCamera);
@@ -41,7 +41,7 @@ export async function writeGo2rtcConfig(cfg, devices) {
     // 0, dts = 4219155056" seconds after the picture starts flowing. Re-stamping costs nothing here —
     // the feed is remuxed, not transcoded, and a live view has no timeline to preserve.
     // These indoor models supply raw H.264; probing can mistake it for MPEG audio/TS.
-    // These battery models supply raw H.265 (HEVC); declaring it skips ffmpeg's format probe, which on a
+    // This battery model supplies raw H.265 (HEVC); declaring it skips ffmpeg's format probe, which on a
     // cold battery camera cost ~3 s before the first frame (measured on a T8170: 9.6-10.2 s -> 6.3-7.3 s).
     // Use a named template: inline {input} is interpreted as a go2rtc source replacement.
     const input = H264_MODELS.includes(d.model)

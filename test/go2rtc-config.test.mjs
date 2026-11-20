@@ -114,18 +114,16 @@ test("known indoor H.264 feeds bypass format probing without transcoding or losi
   }
 });
 
-test("known H.265 feeds bypass format probing with the eufy_hevc template", async () => {
+test("a known H.265 feed bypasses format probing with the eufy_hevc template", async () => {
   const { yaml } = await generate({}, [
     { sn: "SOLO", model: "T8170", stream: "/stream/SOLO" },
     { sn: "LOCK", model: "T8530", stream: "/stream/LOCK" },
     { sn: "INDOOR", model: "T8410", stream: "/stream/INDOOR" },
   ]);
   assert.ok(yaml.includes('  eufy_hevc: "-analyzeduration 0 -probesize 32768 -f hevc -i {input}"\n'));
-  for (const sn of ["SOLO", "LOCK"]) {
-    assert.ok(
-      yaml.includes(`${sn}:\n    - ffmpeg:http://127.0.0.1:3000/stream/${sn}#video=copy#async#input=eufy_hevc\n`),
-    );
-  }
+  assert.ok(yaml.includes("SOLO:\n    - ffmpeg:http://127.0.0.1:3000/stream/SOLO#video=copy#async#input=eufy_hevc\n"));
+  // The T8530 has sent both H.264 and H.265 depending on how its live view starts: keep the probe.
+  assert.ok(yaml.includes("LOCK:\n    - ffmpeg:http://127.0.0.1:3000/stream/LOCK#video=copy#async\n"));
   assert.ok(
     yaml.includes("INDOOR:\n    - ffmpeg:http://127.0.0.1:3000/stream/INDOOR#video=copy#async#input=eufy_h264\n"),
   );
