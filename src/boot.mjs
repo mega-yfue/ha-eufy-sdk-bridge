@@ -61,7 +61,7 @@ async function logCameraChannelMap(eufy, cams) {
   }
 }
 
-export function createBoot(ctx) {
+export function createBoot(ctx, spawnProcess = spawn) {
   const { cfg, eufy, DEBUG, SCHEMA_VERSION, dbg, DETECTION_EVENTS, FORWARDED_EVENTS } = ctx;
   const { flags, timers } = ctx.state;
 
@@ -70,7 +70,7 @@ export function createBoot(ctx) {
     if (!cfg.go2rtcEnable) return;
     if (flags.go2rtcProc) return;
     try {
-      flags.go2rtcProc = spawn("go2rtc", ["-config", cfg.go2rtcConfig], { stdio: "inherit" });
+      flags.go2rtcProc = spawnProcess("go2rtc", ["-config", cfg.go2rtcConfig], { stdio: "inherit" });
       flags.go2rtcProc.on("error", (e) =>
         console.error(`[bridge] go2rtc not started (${e.message}) — WS/control still up`),
       );
@@ -101,6 +101,14 @@ export function createBoot(ctx) {
       // A command ack = the device/station answered the bridge, so it is reachable. The ack info carries
       // the acked device's serial as `sn` (ff09/mqtt-dp/aiot routers all stamp it); skip if absent.
       eufy.on("commandAck", (info) => ctx.noteActivity?.(info?.sn));
+      const registryError = (error) => console.error(`[bridge] go2rtc registry: ${error.message}`);
+      eufy.on("deviceAdded", (device) => {
+        void ctx.rememberGo2rtcDevice?.(device?.sn).catch(registryError);
+      });
+      // The SDK emits removal only after a complete account poll; discovery subsets are preserved.
+      eufy.on("deviceRemoved", (device) => {
+        void ctx.forgetGo2rtcDevice?.(device?.sn).catch(registryError);
+      });
       // A guard-mode write the station never confirmed is re-sent (see arming-confirm.mjs).
       ctx.armingConfirm = createArmingConfirm({ eufy, log: (l) => console.log(`[bridge] ${l}`) });
       // #35 night-vision upgrade: a camera unsure at trigger time pushes `motion`, then the recording is
@@ -156,6 +164,9 @@ export function createBoot(ctx) {
       const cams = await writeGo2rtcConfig(cfg, summaries);
       startGo2rtc();
       flags.ready = true;
+      if (cfg.go2rtcEnable && ctx.syncGo2rtcRegistry) {
+        timers.go2rtcRegistry ??= setInterval(() => void ctx.syncGo2rtcRegistry().catch(registryError), 30_000);
+      }
       timers.watchdog ??= setInterval(() => void ctx.watchdogTick(), 2 * 60_000);
       if (cfg.streamIdleMs) timers.streamIdle ??= setInterval(() => ctx.streamIdleTick(), 30_000);
       if (cfg.rtspIdleOffMs) timers.rtspIdle ??= setInterval(() => void ctx.rtspIdleSweep(), 60_000);

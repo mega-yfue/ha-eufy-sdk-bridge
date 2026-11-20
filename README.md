@@ -27,6 +27,10 @@ Camera summaries advertise SDK-supported optical views and their stream, snapsho
 identifiers. A secondary optic uses `?view=<view>` on the HTTP endpoints; the primary URLs stay unchanged.
 See [optical views](./docs/ws-protocol.md#optical-views) for selection, older-SDK behavior and per-view stills.
 
+Camera discovery is reconciled with the bundled go2rtc every 30 seconds. A camera learned after login
+becomes available without restarting the bridge. An incomplete discovery keeps saved video and audio
+sources, while a confirmed SDK `deviceRemoved` event retires that camera and its optical views.
+
 ## Run it
 
 Pull the published image and run it (bundles the SDK + go2rtc):

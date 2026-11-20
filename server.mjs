@@ -29,6 +29,7 @@ import { createStreamIdle } from "./src/stream-idle.mjs";
 import { createWatchdog } from "./src/watchdog.mjs";
 import { createAuth } from "./src/auth.mjs";
 import { createBoot } from "./src/boot.mjs";
+import { createGo2rtcRegistry } from "./src/go2rtc-registry.mjs";
 import { createSolix } from "./src/solix.mjs";
 import { createClips } from "./src/clip.mjs";
 import { createHttpHandler } from "./src/http-routes.mjs";
@@ -76,6 +77,7 @@ Object.assign(
   createStreamIdle(ctx),
   createWatchdog(ctx),
   createAuth(ctx),
+  createGo2rtcRegistry(ctx),
   createBoot(ctx),
   createSolix(ctx),
   createClips(ctx),
@@ -138,6 +140,7 @@ async function shutdown() {
   if (timers.watchdog) clearInterval(timers.watchdog);
   if (timers.streamIdle) clearInterval(timers.streamIdle);
   if (timers.rtspIdle) clearInterval(timers.rtspIdle);
+  if (timers.go2rtcRegistry) clearInterval(timers.go2rtcRegistry);
   flags.go2rtcProc?.kill();
   await closeStreamClients();
   await ctx.stopSolix?.();
