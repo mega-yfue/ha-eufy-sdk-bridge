@@ -522,6 +522,15 @@ and implements them; registration alone does not establish hardware support for 
 
 ### Endpoint reference
 
+Each advertised optical view also carries `lastScreen`, for example
+`/last-screen/<sn>?view=1`. `screen.take` accepts the same optional integer `view`;
+it captures only that advertised optic and updates its own retained picture.
+`lastScreenUpdated` includes `view` for non-primary optics. Omission still means
+view 0, preserving the existing primary URL, command, cache and event shape.
+The retained endpoint validates secondary views and never wakes the camera or
+substitutes an image from a different optic. Live-view saves announce the selected
+optic too. Event thumbnails remain per physical device.
+
 | method + path           | returns                                                                                                              |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `GET /healthz`          | `{ ok, schemaVersion, bridgeId, auth: { state }, streaming: [sn,…] }` — always available (even before auth)          |
