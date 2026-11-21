@@ -198,7 +198,7 @@ export function createHttpHandler(ctx) {
     if (!flags.ready) return json(res, 503, { error: "not authenticated", auth: ctx.authStatus() });
 
     let view = 0;
-    if ((kind === "stream" || kind === "snapshot" || kind === "audio") && sn) {
+    if ((kind === "stream" || kind === "snapshot" || kind === "audio" || kind === "last-screen") && sn) {
       try {
         view = requestedView(url.searchParams);
       } catch (e) {
@@ -345,8 +345,12 @@ export function createHttpHandler(ctx) {
     // separate from "Last event" (/event-image). Never wakes the camera. 404 until it was watched once.
     // x-saved-at carries when the picture was taken, so a consumer can show its age.
     if (kind === "last-screen" && sn) {
-      const file = path.join(eventImageDir, `last-live-${sn}.jpg`);
+      const file = path.join(eventImageDir, `last-live-${source.id}.jpg`);
       try {
+        if (view !== 0) {
+          const cam = (await eufy.getDevice(sn)).camera?.();
+          if (!cameraViews(cam).includes(view)) return json(res, 404, { error: "unsupported camera view", view });
+        }
         const [jpeg, st] = await Promise.all([fs.promises.readFile(file), fs.promises.stat(file)]);
         res.writeHead(200, {
           "content-type": "image/jpeg",
@@ -565,7 +569,8 @@ export function createHttpHandler(ctx) {
                   sn: source.id,
                   dir: eventImageDir,
                   log: ctx.eventLog ?? (() => {}),
-                  onSaved: view === 0 ? () => ctx.broadcast?.({ event: "lastScreenUpdated", deviceSn: sn }) : undefined,
+                  onSaved: () =>
+                    ctx.broadcast?.({ event: "lastScreenUpdated", deviceSn: sn, ...(view === 0 ? {} : { view }) }),
                 })
               : null;
           still?.onChunk(first);
