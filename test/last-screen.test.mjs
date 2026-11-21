@@ -10,7 +10,7 @@ import { loadConfig } from "../src/config.mjs";
 import { createState } from "../src/state.mjs";
 import { createHttpHandler } from "../src/http-routes.mjs";
 
-function setup({ live = true, event = true } = {}) {
+function setup({ live = true, event = true, removed = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "screen-"));
   const liveFile = path.join(dir, "last-live-CAM1.jpg");
   const eventFile = path.join(dir, "last-event-CAM1.jpg");
@@ -41,6 +41,7 @@ function setup({ live = true, event = true } = {}) {
     authStatus: () => ({ status: "ok" }),
     eufy: {
       async getDevice() {
+        if (removed) throw new Error("device no longer in inventory");
         return { camera: () => cam, describe: () => ({ sn: "CAM1", capabilities: ["camera", "video", "battery"] }) };
       },
     },
@@ -76,6 +77,13 @@ test("/last-screen is 404 for a camera never watched", async () => {
   const { handler } = setup({ live: false });
   const r = await get(handler, "/last-screen/CAM1");
   assert.equal(r.code, 404);
+});
+
+test("a removed secondary device returns 404 instead of rejecting the HTTP handler", async () => {
+  const { handler, wakes } = setup({ removed: true });
+  const r = await get(handler, "/last-screen/CAM1?view=1");
+  assert.equal(r.code, 404);
+  assert.equal(wakes(), 0);
 });
 
 test("/snapshot?mode=screen prefers the last screen over a newer event, without waking the camera", async () => {

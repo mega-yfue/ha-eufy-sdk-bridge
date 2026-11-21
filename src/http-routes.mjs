@@ -345,12 +345,12 @@ export function createHttpHandler(ctx) {
     // separate from "Last event" (/event-image). Never wakes the camera. 404 until it was watched once.
     // x-saved-at carries when the picture was taken, so a consumer can show its age.
     if (kind === "last-screen" && sn) {
-      if (view !== 0) {
-        const cam = (await eufy.getDevice(sn)).camera?.();
-        if (!cameraViews(cam).includes(view)) return json(res, 404, { error: "unsupported camera view", view });
-      }
       const file = path.join(eventImageDir, `last-live-${source.id}.jpg`);
       try {
+        if (view !== 0) {
+          const cam = (await eufy.getDevice(sn)).camera?.();
+          if (!cameraViews(cam).includes(view)) return json(res, 404, { error: "unsupported camera view", view });
+        }
         const [jpeg, st] = await Promise.all([fs.promises.readFile(file), fs.promises.stat(file)]);
         res.writeHead(200, {
           "content-type": "image/jpeg",
