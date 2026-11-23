@@ -33,7 +33,7 @@ async function setup(t, { views = [0, 1], legacy = false, model = "T8E00", liveO
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bridge-optics-"));
   const state = createState();
   state.flags.ready = true;
-  const calls = { opens: [], snapshots: [], stored: 0, dropped: 0, failures: 0 };
+  const calls = { opens: [], snapshots: [], stored: 0, dropped: 0, failures: 0, events: [] };
   const camera = {
     ...(!legacy ? { views: () => views } : {}),
     openReadable: async (opts) => {
@@ -85,7 +85,9 @@ async function setup(t, { views = [0, 1], legacy = false, model = "T8E00", liveO
     eufy,
     eventImageDir: dir,
     eventLog() {},
-    broadcast() {},
+    broadcast(event) {
+      calls.events.push(event);
+    },
     dbg() {},
     SCHEMA_VERSION: 1,
     authStatus: () => ({ state: "ok" }),
@@ -100,6 +102,7 @@ async function setup(t, { views = [0, 1], legacy = false, model = "T8E00", liveO
   const server = http.createServer((req, res) => void handler(req, res));
   const handler = createHttpHandler(ctx);
   Object.assign(ctx, createWsServer(ctx, server));
+  state.clients.add({ readyState: 1, OPEN: 1, send: (s) => calls.events.push(JSON.parse(s)) });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(async () => {
     server.closeAllConnections();
@@ -125,6 +128,47 @@ async function setup(t, { views = [0, 1], legacy = false, model = "T8E00", liveO
   return { ctx, calls, camera, dir, base, ws, pull };
 }
 
+test("screen.take and last-screen isolate optics through the advertised WS and HTTP paths", async (t) => {
+  const h = await setup(t);
+  const device = (await h.ws("device.state")).device;
+  assert.deepEqual(
+    device.views.map((v) => v.lastScreen),
+    [`/last-screen/${SN}`, `/last-screen/${SN}?view=1`],
+  );
+  assert.equal((await h.ws("screen.take")).bytes, 12);
+  assert.equal((await h.ws("screen.take", { view: 1 })).bytes, 12);
+  assert.deepEqual(h.calls.snapshots, [undefined, { view: 1 }]);
+  for (const view of [0, 1]) {
+    const response = await fetch(`${h.base}${device.views[view].lastScreen}`);
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), `jpeg-optic-${view}`);
+    assert.ok(response.headers.get("x-saved-at"));
+  }
+  assert.deepEqual(h.calls.events, [
+    { event: "lastScreenUpdated", deviceSn: SN },
+    { event: "lastScreenUpdated", deviceSn: SN, view: 1 },
+  ]);
+  assert.equal((await h.ws("screen.take", { view: "1" })).ok, false);
+  assert.equal((await h.ws("screen.take", { view: 9 })).ok, false);
+  assert.equal(h.calls.snapshots.length, 2);
+});
+
+test("last-screen rejects malformed and unsupported optics without leaking the primary cache", async (t) => {
+  const h = await setup(t, { views: [0] });
+  await h.ws("screen.take");
+  await fs.writeFile(path.join(h.dir, `last-live-${SN}_view_1.jpg`), "old-secondary");
+  for (const [query, status] of [
+    ["view=1", 404],
+    ["view=-1", 400],
+    ["view=1&view=0", 400],
+  ]) {
+    const response = await fetch(`${h.base}/last-screen/${SN}?${query}`);
+    assert.equal(response.status, status);
+    await response.body.cancel();
+  }
+  assert.equal(h.calls.snapshots.length, 1);
+});
+
 async function until(predicate) {
   for (let i = 0; i < 100; i++) {
     if (predicate()) return;
@@ -140,8 +184,14 @@ test("devices.list and device.state advertise the SDK's views with stable primar
   assert.deepEqual(list.devices[0], single.device);
   assert.equal(single.device.stream, `/stream/${SN}`);
   assert.deepEqual(single.device.views, [
-    { view: 0, id: SN, stream: `/stream/${SN}`, snapshot: `/snapshot/${SN}` },
-    { view: 1, id: `${SN}_view_1`, stream: `/stream/${SN}?view=1`, snapshot: `/snapshot/${SN}?view=1` },
+    { view: 0, id: SN, stream: `/stream/${SN}`, snapshot: `/snapshot/${SN}`, lastScreen: `/last-screen/${SN}` },
+    {
+      view: 1,
+      id: `${SN}_view_1`,
+      stream: `/stream/${SN}?view=1`,
+      snapshot: `/snapshot/${SN}?view=1`,
+      lastScreen: `/last-screen/${SN}?view=1`,
+    },
   ]);
   assert.equal(h.calls.opens.length, 0);
 });
@@ -150,7 +200,9 @@ test("legacy SDKs and single-view cameras retain one primary source", async (t) 
   for (const opts of [{ legacy: true }, { views: [0], model: "T8P00" }]) {
     const h = await setup(t, opts);
     const result = await h.ws("device.state");
-    assert.deepEqual(result.device.views, [{ view: 0, id: SN, stream: `/stream/${SN}`, snapshot: `/snapshot/${SN}` }]);
+    assert.deepEqual(result.device.views, [
+      { view: 0, id: SN, stream: `/stream/${SN}`, snapshot: `/snapshot/${SN}`, lastScreen: `/last-screen/${SN}` },
+    ]);
   }
 });
 

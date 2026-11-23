@@ -242,7 +242,7 @@ export function createWsServer(ctx, httpServer) {
         case "screen.take": {
           // "Take screenshot" button: a fresh still from the camera (wakes a battery camera), kept as its
           // last screen and announced with lastScreenUpdated. Answers { bytes }.
-          return reply(await takeScreenshot(ctx, msg.sn));
+          return reply(await takeScreenshot(ctx, msg.sn, msg.view === undefined ? 0 : msg.view));
         }
         case "light.effects": {
           // The smart-light effect gallery (id + display name) for HA's effect_list. Cached; pass
