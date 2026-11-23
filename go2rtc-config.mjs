@@ -14,6 +14,10 @@ import { dirname } from "node:path";
 // would miss a camera the SDK downgrades to "other" for sitting behind a HomeBase (not direct P2P).
 const isCamera = (d) => Boolean(d.stream);
 
+// Models whose raw feed codec is known, so ffmpeg is told the format instead of probing for it.
+const H264_MODELS = ["T8400", "T8410"];
+const HEVC_MODELS = ["T8170"]; // SoloCam S340 (verified HEVC Annex-B)
+
 export async function writeGo2rtcConfig(cfg, devices) {
   const cams = devices.filter(isCamera);
   const lines = [
@@ -26,6 +30,7 @@ export async function writeGo2rtcConfig(cfg, devices) {
     `  listen: ":${cfg.go2rtcWebrtcPort ?? 8555}"`,
     "ffmpeg:",
     '  eufy_h264: "-analyzeduration 0 -probesize 32768 -f h264 -i {input}"',
+    '  eufy_hevc: "-analyzeduration 0 -probesize 32768 -f hevc -i {input}"',
     "streams:",
   ];
   for (const d of cams) {
@@ -36,8 +41,14 @@ export async function writeGo2rtcConfig(cfg, devices) {
     // 0, dts = 4219155056" seconds after the picture starts flowing. Re-stamping costs nothing here —
     // the feed is remuxed, not transcoded, and a live view has no timeline to preserve.
     // These indoor models supply raw H.264; probing can mistake it for MPEG audio/TS.
+    // This battery model supplies raw H.265 (HEVC); declaring it skips ffmpeg's format probe, which on a
+    // cold battery camera cost ~3 s before the first frame (measured on a T8170: 9.6-10.2 s -> 6.3-7.3 s).
     // Use a named template: inline {input} is interpreted as a go2rtc source replacement.
-    const input = ["T8400", "T8410"].includes(d.model) ? "#input=eufy_h264" : "";
+    const input = H264_MODELS.includes(d.model)
+      ? "#input=eufy_h264"
+      : HEVC_MODELS.includes(d.model)
+        ? "#input=eufy_hevc"
+        : "";
     for (const view of d.views ?? [{ id: d.sn, stream: d.stream }]) {
       const base = `http://${cfg.selfHost}:${cfg.port}`;
       const audioPath = view.stream.replace(/^\/stream\//, "/audio/");
