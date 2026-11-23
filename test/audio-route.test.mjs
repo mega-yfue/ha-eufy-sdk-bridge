@@ -4,13 +4,20 @@
 // - A camera with no aac-lc audio answers 404 without arming the failure backoff or dropping its client:
 //   its video is fine, and /stream on the same client must keep working.
 // - The viewer leaving releases the live() consumer and clears the camera's streaming state, like /stream.
+// - Cold start: a camera whose live audio format is kept answers at once with silence in that format, then its
+//   live audio; a different live format ends the response (go2rtc reconnects), and a camera shown to have no
+//   aac-lc audio loses its kept format so its next request can answer 404.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import { loadConfig } from "../src/config.mjs";
 import { createState } from "../src/state.mjs";
+import { saveAudioFormat, loadAudioFormat, silentAdtsFrame } from "../src/audio-primer.mjs";
 
 process.env.BRIDGE_STREAM_CONSUMER_LOG_MS = "0"; // no real HTTP at :1984 from the consumer probe
 const { createHttpHandler } = await import("../src/http-routes.mjs");
@@ -24,9 +31,18 @@ async function until(cond, what) {
   assert.fail(`timed out waiting for: ${what}`);
 }
 
+/** `promise`, or a test failure after ~2s: a response that should end but does not fails instead of hanging. */
+function within(promise, what) {
+  let timer;
+  const late = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timed out waiting for: ${what}`)), 2000);
+  });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+}
+
 /** A bridge HTTP server over a fake camera whose live() hands out the handles the test drives. */
-async function setup({ live = true, views = [0] } = {}) {
-  const config = loadConfig({ EUFY_EMAIL: "x@y.z", EUFY_PASSWORD: "pw" });
+async function setup({ live = true, views = [0], dir, env = {} } = {}) {
+  const config = loadConfig({ EUFY_EMAIL: "x@y.z", EUFY_PASSWORD: "pw", ...env });
   const state = createState();
   state.flags.ready = true;
   const t = { state, broadcasts: [], handles: [], readableOpens: 0, dropped: [], failures: [] };
@@ -47,7 +63,7 @@ async function setup({ live = true, views = [0] } = {}) {
   const ctx = {
     ...config,
     state,
-    eventImageDir: undefined,
+    eventImageDir: dir,
     eventLog: () => {},
     broadcast: (msg) => void t.broadcasts.push(msg),
     noteStreamOpened: () => {},
@@ -179,3 +195,120 @@ test("an unadvertised audio view stays a 404 without opening live media", async 
     await t.close();
   }
 });
+
+// A T8200's live audio: AAC-LC, 16 kHz, stereo (its first ADTS header on 17 Nov 2026, then frame bytes).
+const STEREO = { mpeg2: 0, profile: 1, rateIndex: 8, channels: 2 };
+const LIVE_FRAME = Buffer.from("fff16080181ffc211a", "hex");
+const MONO_FRAME = Buffer.from("fff16040181ffc211a", "hex");
+const SILENCE = silentAdtsFrame(STEREO).toString("hex");
+
+function tmpDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "audio-route-"));
+}
+
+test("cold start: a kept format answers at once with matching silence, then the live audio", async () => {
+  const dir = tmpDir();
+  await saveAudioFormat(dir, "CAM1", STEREO);
+  const t = await setup({ dir });
+  try {
+    const p = pull(t);
+    // Before the camera has sent anything: go2rtc already has headers and an ADTS header to read.
+    await until(() => p.chunks.length > 0, "silence before any live frame");
+    assert.equal(p.status, 200);
+    assert.equal(p.type, "audio/aac");
+    assert.ok(p.hex().startsWith(SILENCE));
+    await until(() => t.handles.length === 1, "live() consumer attached");
+    const h = t.handles[0];
+    h.emit("audio", { codec: "aac-lc", data: LIVE_FRAME });
+    await until(() => p.hex().endsWith(LIVE_FRAME.toString("hex")), "live audio follows the silence");
+    assert.equal(p.hex().replaceAll(SILENCE, "").length, LIVE_FRAME.length * 2, "nothing but silence before it");
+    const silentNow = p.hex().split(SILENCE).length;
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(p.hex().split(SILENCE).length, silentNow, "no silence once the live audio runs");
+    h.emit("stop");
+    await p.done;
+  } finally {
+    await t.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("cold start: no kept format waits for the camera as before, and keeps the format it sends", async () => {
+  const dir = tmpDir();
+  const t = await setup({ dir });
+  try {
+    const p = pull(t);
+    await until(() => t.handles.length === 1, "live() consumer attached");
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(p.status, undefined, "no answer before the camera's first frame");
+    t.handles[0].emit("audio", { codec: "aac-lc", data: LIVE_FRAME });
+    await until(() => p.hex() === LIVE_FRAME.toString("hex"), "the live frame, with no silence");
+    // Kept before the frame is written, so it is on disk by now.
+    assert.deepEqual(await loadAudioFormat(dir, "CAM1"), STEREO);
+    t.handles[0].emit("stop");
+    await p.done;
+  } finally {
+    await t.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("cold start: live audio in another format ends the primed response and replaces the kept format", async () => {
+  const dir = tmpDir();
+  await saveAudioFormat(dir, "CAM1", STEREO);
+  const t = await setup({ dir });
+  try {
+    const p = pull(t);
+    await until(() => t.handles.length === 1, "live() consumer attached");
+    t.handles[0].emit("audio", { codec: "aac-lc", data: MONO_FRAME });
+    await within(p.done, "the primed response to end");
+    assert.equal(p.status, 200);
+    assert.ok(!p.hex().includes(MONO_FRAME.toString("hex")), "mono never follows stereo silence");
+    assert.equal(t.handles[0].stops, 1, "the consumer is released");
+    assert.equal((await loadAudioFormat(dir, "CAM1")).channels, 1, "the next request primes in mono");
+    await until(() => !t.state.streaming.has("CAM1"), "not left streaming");
+  } finally {
+    await t.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("cold start: a primed camera that turns out to send no aac-lc forgets its format", async () => {
+  const dir = tmpDir();
+  await saveAudioFormat(dir, "CAM1", STEREO);
+  const t = await setup({ dir });
+  try {
+    const p = pull(t);
+    await until(() => t.handles.length === 1, "live() consumer attached");
+    t.handles[0].emit("audio", { codec: "g711a", data: Buffer.from("00", "hex") });
+    await within(p.done, "the primed response to end");
+    assert.equal(p.status, 200, "already primed: the response ends instead of a 404");
+    assert.equal(await loadAudioFormat(dir, "CAM1"), null, "so the next request waits and can answer 404");
+    assert.deepEqual(t.failures, [], "no failure backoff: the camera's video is fine");
+  } finally {
+    await t.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+for (const [name, opts, query] of [
+  ["a secondary view", { views: [0, 1] }, "?view=1"],
+  ["STREAM_INSTANT_START=0", { env: { STREAM_INSTANT_START: "0" } }, ""],
+]) {
+  test(`cold start: ${name} is never primed`, async () => {
+    const dir = tmpDir();
+    await saveAudioFormat(dir, "CAM1", STEREO);
+    await saveAudioFormat(dir, "CAM1_view_1", STEREO);
+    const t = await setup({ dir, ...opts });
+    try {
+      const p = pull(t, query);
+      await until(() => t.handles.length === 1, "live() consumer attached");
+      await new Promise((r) => setTimeout(r, 100));
+      assert.equal(p.status, undefined, "no answer before the camera's first frame");
+      p.req.destroy();
+    } finally {
+      await t.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}

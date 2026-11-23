@@ -548,6 +548,15 @@ must treat a connection that ends early as that failure. Set `STREAM_INSTANT_STA
 codes back. A failure backoff (`503`), an idle suspension (`503`) and a secondary `?view=` are never primed,
 so they keep their status codes.
 
+**`/audio` is primed the same way** once the bridge has heard the camera's live audio: it answers `200` at
+once with silence in that audio's format (AAC-LC rate and channel count, from the camera's last live ADTS
+header, kept in the data directory as `last-audio-<sn>.json`), one frame per 1024 samples in real time, until
+the live audio takes over. go2rtc dials a camera's sources in turn, so without this an `/audio` waiting for a
+waking camera's first frame would hold every viewer's `DESCRIBE` past its 5 s deadline. A camera never heard
+here waits for its first frame as before (or answers `404`). If the live audio's format differs from the
+silence, or the camera turns out to send no AAC-LC, the bridge ends the connection: go2rtc reconnects, and the
+next request is primed with the new format, or waits and answers `404`.
+
 The bridge does not infer cloud-poll health from device-event silence; `ok` means the HTTP endpoint answered.
 
 `GET /snapshot/<sn>` uses `SNAPSHOT_LIVE` when no mode is supplied. A request may use `?mode=auto` for
