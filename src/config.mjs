@@ -102,7 +102,7 @@ export function loadConfig(env = process.env) {
     // live view has sound. Audio rides the P2P session /stream already holds — it never wakes a camera on
     // its own. Off by default (unchanged behaviour); LIVE_AUDIO=1 enables it.
     liveAudio: truthy(env.LIVE_AUDIO),
-    // How long /audio waits for /stream to open the session before answering 503 (go2rtc retries).
+    // How long an /audio feed may run with no /stream feed beside it before it is closed (orphan guard).
     liveAudioWaitMs: positiveInt(env.LIVE_AUDIO_WAIT_MS) ?? 20_000,
     // Battery-saver: a BATTERY camera left with the device's native `rtspStream` publish ON encodes
     // continuously and drains, even when nobody consumes it. If a battery device has rtspStream=true and

@@ -44,17 +44,6 @@ export function createHttpHandler(ctx) {
   // Open /audio responses per camera. Audio never opens a session of its own: it rides the P2P session a
   // /stream request already holds, and ends with the last /stream feed for that camera (see cleanup).
   const audioFeeds = new Map(); // sn -> Set<Readable>
-  const AUDIO_WAIT_STEP_MS = 250;
-
-  /** Wait until /stream holds a feed for `sn` (up to `ms`), or the requester leaves. */
-  async function videoEntryFor(sn, ms, isGone) {
-    for (let waited = 0; ; waited += AUDIO_WAIT_STEP_MS) {
-      const entry = activeStreams.get(sn);
-      if (entry || isGone() || waited >= ms) return entry;
-      await new Promise((r) => setTimeout(r, AUDIO_WAIT_STEP_MS));
-    }
-  }
-
   function closeAudio(sn) {
     const set = audioFeeds.get(sn);
     if (!set) return;
@@ -453,30 +442,39 @@ export function createHttpHandler(ctx) {
 
     if (kind === "audio" && sn) {
       if (!cfg.liveAudio) return json(res, 404, { error: "live audio is disabled (LIVE_AUDIO=0)" });
+      // Same battery guards as /stream: never wake a camera the video path is keeping asleep.
+      if (cfg.streamIdleMs && idleSuspended.has(sn)) return json(res, 503, { error: "stream idle-suspended" });
+      if ((ctx.streamBackoffMs?.(sn) ?? 0) > 0) return json(res, 503, { error: "stream backing off after a failed open" });
       let gone = false;
       const onGone = () => (gone = true);
       res.once("close", onGone);
-      // go2rtc opens the video and audio sources of one stream together, in no set order: give /stream
-      // time to open the session instead of waking the camera a second time from here.
-      const entry = await videoEntryFor(sn, cfg.liveAudioWaitMs, () => gone);
-      res.off("close", onGone);
-      if (gone) return;
-      if (!entry) return json(res, 503, { error: "no live video open for this camera — /audio follows /stream" });
       let audio;
       try {
-        const client = await entry.lease;
+        // go2rtc dials the video and audio sources of one stream together, in no set order. Both go through
+        // the same cached per-camera client, and `live()` attaches to the SDK's ONE shared live source — so
+        // whichever arrives first opens the session and the other joins it: the camera is woken once.
+        const lease = activeStreams.get(sn)?.lease ?? openStreamClient(sn, cfg);
+        const client = await lease;
         const cam = (await client.getDevice(sn)).camera?.();
-        if (!cam?.live) return json(res, 404, { error: "no live audio on this device" });
-        audio = audioReadableFromLive(await cam.live(), {
+        if (!cam?.live) {
+          res.off("close", onGone);
+          return json(res, 404, { error: "no live audio on this device" });
+        }
+        if (gone) return; // don't wake the camera for a viewer that already left
+        const budget = cfg.streamBatteryBudgetMs;
+        audio = audioReadableFromLive(await cam.live(budget ? { batteryBudgetMs: budget } : undefined), {
           onUnsupported: (codec) =>
             console.warn(`[bridge] /audio ${sn}: ${codec} audio is not served (only AAC-LC can be framed as ADTS)`),
         });
       } catch (e) {
+        res.off("close", onGone);
+        if (isSupersededStreamClient(e)) return json(res, 503, { error: String(e?.message ?? e) });
         return json(res, 502, { error: String(e?.message ?? e) });
       }
-      if (gone || !activeStreams.has(sn)) {
-        audio.destroy(); // the viewer or the video session left while the consumer attached
-        return gone ? undefined : json(res, 503, { error: "the live video session ended" });
+      res.off("close", onGone);
+      if (gone) {
+        audio.destroy(); // detach from the shared source
+        return;
       }
       let set = audioFeeds.get(sn);
       if (!set) audioFeeds.set(sn, (set = new Set()));
@@ -484,7 +482,14 @@ export function createHttpHandler(ctx) {
       res.writeHead(200, { "content-type": "audio/aac", "cache-control": "no-cache" });
       res.flushHeaders(); // answer go2rtc now: the first ADTS frame can be a few hundred ms away
       audio.pipe(res);
+      // Audio is a companion of /stream: if no video feed joins in time, it must not keep the camera awake
+      // on its own (the idle sweep only watches video). It also ends with the last video feed (closeAudio).
+      const orphanTimer = setTimeout(() => {
+        if (!activeStreams.has(sn)) audio.destroy();
+      }, cfg.liveAudioWaitMs);
+      orphanTimer.unref?.();
       const cleanup = () => {
+        clearTimeout(orphanTimer);
         set.delete(audio);
         if (!set.size && audioFeeds.get(sn) === set) audioFeeds.delete(sn);
         audio.destroy();

@@ -1,6 +1,7 @@
 // Live audio (LIVE_AUDIO=1): /audio/<sn> serves the camera's AAC-LC frames as an ADTS stream that go2rtc
-// merges into the camera's stream. Audio must never open a P2P session of its own — it rides the one
-// /stream holds — and it must end when the last /stream feed for that camera ends.
+// merges into the camera's stream. go2rtc dials the audio and video sources together in no set order, so
+// /audio goes through the same per-camera client and joins the SDK's shared live source. It honours the
+// same battery guards as /stream, is closed if no video feed joins it, and ends with the last video feed.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
@@ -135,7 +136,7 @@ async function setup(env = {}) {
       }),
     }),
   };
-  const ctx = {
+  const ctx = (t.ctx = {
     ...config,
     state,
     eventImageDir: undefined,
@@ -149,7 +150,7 @@ async function setup(env = {}) {
       t.clientsMade++;
       return Promise.resolve(client);
     },
-  };
+  });
   const handler = createHttpHandler(ctx);
   const server = http.createServer((req, res) => void handler(req, res));
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
@@ -186,13 +187,29 @@ test("/audio is 404 when LIVE_AUDIO is off", async () => {
   await t.close();
 });
 
-test("/audio without an open /stream answers 503 and opens no session", async () => {
+test("/audio on an idle-suspended or backing-off camera answers 503 and wakes nothing", async () => {
   const t = await setup();
+  t.ctx.state.idleSuspended.add("CAM1");
   const a = get(t, "/audio/CAM1");
   await a.done;
   assert.equal(a.status, 503);
-  assert.equal(t.clientsMade, 0, "audio must never open a P2P session itself");
+  t.ctx.state.idleSuspended.delete("CAM1");
+  t.ctx.streamBackoffMs = () => 5000;
+  const b = get(t, "/audio/CAM1");
+  await b.done;
+  assert.equal(b.status, 503);
+  assert.equal(t.clientsMade, 0);
   assert.equal(t.consumers.length, 0);
+  await t.close();
+});
+
+test("/audio opened before /stream works, but is closed if no video feed joins", async () => {
+  const t = await setup(); // LIVE_AUDIO_WAIT_MS=300
+  const a = get(t, "/audio/CAM1");
+  await until(() => a.status === 200, "audio response headers");
+  assert.equal(t.consumers.length, 1);
+  await a.done; // nobody opened /stream → the orphan guard ends it
+  await until(() => t.consumers[0].stopped > 0, "orphan audio consumer stopped");
   await t.close();
 });
 
@@ -200,8 +217,7 @@ test("/audio rides the /stream session, serves ADTS, and ends with the video", a
   const t = await setup();
   const v = get(t, "/stream/CAM1");
   const a = get(t, "/audio/CAM1"); // opened together, like go2rtc does
-  await until(() => t.consumers.length === 1, "audio consumer attached");
-  assert.equal(t.clientsMade, 1, "one session for video and audio");
+  await until(() => t.consumers.length === 1 && t.feeds.length === 1, "audio and video attached");
   await until(() => a.status === 200, "audio response headers");
   assert.equal(a.type, "audio/aac");
   t.consumers[0].emit("audio", { codec: "aac-lc", data: ADTS_A });
