@@ -7,6 +7,7 @@ import path from "node:path";
 import { streamClientFor, dropStreamClient, isSupersededStreamClient } from "../streams.mjs";
 import { createLiveStillTap } from "./live-still.mjs";
 import { liveFeedOpener } from "./live-feed.mjs";
+import { audioReadableFromLive } from "./live-audio.mjs";
 import { onBatteryPower } from "./power.mjs";
 import { storedThumbnailSeenAt } from "./stored-thumbnail.mjs";
 import { redactSecrets } from "./redact.mjs";
@@ -40,6 +41,26 @@ export function createHttpHandler(ctx) {
   // A failed session is never reused, but it is not dropped under a request still streaming on it:
   // such a lease is dropped once its last feed ends (see cleanup).
   const dropWhenIdle = new WeakSet();
+  // Open /audio responses per camera. Audio never opens a session of its own: it rides the P2P session a
+  // /stream request already holds, and ends with the last /stream feed for that camera (see cleanup).
+  const audioFeeds = new Map(); // sn -> Set<Readable>
+  const AUDIO_WAIT_STEP_MS = 250;
+
+  /** Wait until /stream holds a feed for `sn` (up to `ms`), or the requester leaves. */
+  async function videoEntryFor(sn, ms, isGone) {
+    for (let waited = 0; ; waited += AUDIO_WAIT_STEP_MS) {
+      const entry = activeStreams.get(sn);
+      if (entry || isGone() || waited >= ms) return entry;
+      await new Promise((r) => setTimeout(r, AUDIO_WAIT_STEP_MS));
+    }
+  }
+
+  function closeAudio(sn) {
+    const set = audioFeeds.get(sn);
+    if (!set) return;
+    audioFeeds.delete(sn);
+    for (const audio of set) audio.destroy();
+  }
 
   /** The persisted image when it was written after `since` and differs from `jpeg`, else undefined. */
   async function diskCopyNewerThan(file, since, jpeg) {
@@ -405,6 +426,7 @@ export function createHttpHandler(ctx) {
           }
           if (feeds.size) return;
           openFeeds.delete(sn);
+          closeAudio(sn); // audio rides this camera's video session — it ends with the last feed
           if (streaming.delete(sn)) ctx.broadcast({ event: "streamState", deviceSn: sn, active: false });
         };
         req.on("close", cleanup);
@@ -427,6 +449,51 @@ export function createHttpHandler(ctx) {
         else dropClient(sn, lease);
         return json(res, 502, { error: String(e?.message ?? e) });
       }
+    }
+
+    if (kind === "audio" && sn) {
+      if (!cfg.liveAudio) return json(res, 404, { error: "live audio is disabled (LIVE_AUDIO=0)" });
+      let gone = false;
+      const onGone = () => (gone = true);
+      res.once("close", onGone);
+      // go2rtc opens the video and audio sources of one stream together, in no set order: give /stream
+      // time to open the session instead of waking the camera a second time from here.
+      const entry = await videoEntryFor(sn, cfg.liveAudioWaitMs, () => gone);
+      res.off("close", onGone);
+      if (gone) return;
+      if (!entry) return json(res, 503, { error: "no live video open for this camera — /audio follows /stream" });
+      let audio;
+      try {
+        const client = await entry.lease;
+        const cam = (await client.getDevice(sn)).camera?.();
+        if (!cam?.live) return json(res, 404, { error: "no live audio on this device" });
+        audio = audioReadableFromLive(await cam.live(), {
+          onUnsupported: (codec) =>
+            console.warn(`[bridge] /audio ${sn}: ${codec} audio is not served (only AAC-LC can be framed as ADTS)`),
+        });
+      } catch (e) {
+        return json(res, 502, { error: String(e?.message ?? e) });
+      }
+      if (gone || !activeStreams.has(sn)) {
+        audio.destroy(); // the viewer or the video session left while the consumer attached
+        return gone ? undefined : json(res, 503, { error: "the live video session ended" });
+      }
+      let set = audioFeeds.get(sn);
+      if (!set) audioFeeds.set(sn, (set = new Set()));
+      set.add(audio);
+      res.writeHead(200, { "content-type": "audio/aac", "cache-control": "no-cache" });
+      res.flushHeaders(); // answer go2rtc now: the first ADTS frame can be a few hundred ms away
+      audio.pipe(res);
+      const cleanup = () => {
+        set.delete(audio);
+        if (!set.size && audioFeeds.get(sn) === set) audioFeeds.delete(sn);
+        audio.destroy();
+        if (!audio.readableEnded) res.destroy();
+      };
+      req.on("close", cleanup);
+      audio.on("error", cleanup);
+      audio.on("close", cleanup);
+      return;
     }
 
     return json(res, 404, { error: "not found" });

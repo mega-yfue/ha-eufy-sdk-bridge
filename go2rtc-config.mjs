@@ -26,6 +26,7 @@ export async function writeGo2rtcConfig(cfg, devices) {
     `  listen: ":${cfg.go2rtcWebrtcPort ?? 8555}"`,
     "ffmpeg:",
     '  eufy_h264: "-analyzeduration 0 -probesize 32768 -f h264 -i {input}"',
+    '  eufy_aac: "-analyzeduration 0 -probesize 4096 -f aac -i {input}"',
     "streams:",
   ];
   for (const d of cams) {
@@ -39,7 +40,16 @@ export async function writeGo2rtcConfig(cfg, devices) {
     // Use a named template: inline {input} is interpreted as a go2rtc source replacement.
     const input = ["T8400", "T8410"].includes(d.model) ? "#input=eufy_h264" : "";
     for (const view of d.views ?? [{ id: d.sn, stream: d.stream }]) {
-      lines.push(`  ${view.id}: ffmpeg:http://${cfg.selfHost}:${cfg.port}${view.stream}#video=copy#async${input}`);
+      const video = `ffmpeg:http://${cfg.selfHost}:${cfg.port}${view.stream}#video=copy#async${input}`;
+      // Live audio (LIVE_AUDIO=1): a second source for the main view only, merged by go2rtc into the same
+      // stream. AAC is copied for MSE/RTSP/HLS and transcoded to Opus for WebRTC, which has no AAC.
+      if (cfg.liveAudio && view.id === d.sn) {
+        lines.push(`  ${view.id}:`);
+        lines.push(`    - ${video}`);
+        lines.push(`    - ffmpeg:http://${cfg.selfHost}:${cfg.port}/audio/${d.sn}#audio=copy#audio=opus#async#input=eufy_aac`);
+      } else {
+        lines.push(`  ${view.id}: ${video}`);
+      }
     }
   }
   const yaml = lines.join("\n") + "\n";
