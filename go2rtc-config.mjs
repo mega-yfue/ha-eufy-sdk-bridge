@@ -49,7 +49,10 @@ export async function writeGo2rtcConfig(cfg, devices) {
       : HEVC_MODELS.includes(d.model)
         ? "#input=eufy_hevc"
         : "";
-    for (const view of d.views ?? [{ id: d.sn, stream: d.stream }]) {
+    for (const view of (d.views ?? [{ id: d.sn, stream: d.stream }]).flatMap((view) => [
+      view,
+      ...(view.outputs ?? []),
+    ])) {
       const base = `http://${cfg.selfHost}:${cfg.port}`;
       const audioPath = view.stream.replace(/^\/stream\//, "/audio/");
       lines.push(`  ${view.id}:`);
