@@ -444,7 +444,8 @@ export function createHttpHandler(ctx) {
       if (!cfg.liveAudio) return json(res, 404, { error: "live audio is disabled (LIVE_AUDIO=0)" });
       // Same battery guards as /stream: never wake a camera the video path is keeping asleep.
       if (cfg.streamIdleMs && idleSuspended.has(sn)) return json(res, 503, { error: "stream idle-suspended" });
-      if ((ctx.streamBackoffMs?.(sn) ?? 0) > 0) return json(res, 503, { error: "stream backing off after a failed open" });
+      if ((ctx.streamBackoffMs?.(sn) ?? 0) > 0)
+        return json(res, 503, { error: "stream backing off after a failed open" });
       let gone = false;
       const onGone = () => (gone = true);
       res.once("close", onGone);

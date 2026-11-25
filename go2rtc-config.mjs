@@ -48,7 +48,9 @@ export async function writeGo2rtcConfig(cfg, devices) {
       if (cfg.liveAudio && view.id === d.sn) {
         lines.push(`  ${view.id}:`);
         lines.push(`    - ${video}`);
-        lines.push(`    - ffmpeg:http://${cfg.selfHost}:${cfg.port}/audio/${d.sn}#audio=aac#audio=opus#async#input=eufy_aac`);
+        lines.push(
+          `    - ffmpeg:http://${cfg.selfHost}:${cfg.port}/audio/${d.sn}#audio=aac#audio=opus#async#input=eufy_aac`,
+        );
       } else {
         lines.push(`  ${view.id}: ${video}`);
       }

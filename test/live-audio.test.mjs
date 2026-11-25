@@ -116,7 +116,13 @@ test("LIVE_AUDIO is off by default and parsed from the environment", () => {
 // ── the /audio route ───────────────────────────────────────────────────────────────────────────────
 
 async function setup(env = {}) {
-  const config = loadConfig({ EUFY_EMAIL: "x@y.z", EUFY_PASSWORD: "pw", LIVE_AUDIO: "1", LIVE_AUDIO_WAIT_MS: "300", ...env });
+  const config = loadConfig({
+    EUFY_EMAIL: "x@y.z",
+    EUFY_PASSWORD: "pw",
+    LIVE_AUDIO: "1",
+    LIVE_AUDIO_WAIT_MS: "300",
+    ...env,
+  });
   const state = createState();
   state.flags.ready = true;
   const t = { feeds: [], consumers: [], clientsMade: 0 };
