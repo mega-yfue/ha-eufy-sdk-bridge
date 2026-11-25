@@ -138,7 +138,7 @@ test("the first latest-info crop does not replace an image already on disk", asy
   assert.equal(fs.readFileSync(file, "utf8"), "newer push thumbnail");
 });
 
-test("a station that has answered the direct read is never asked latest-info", async () => {
+test("a station that has answered the direct read is not asked latest-info when the read drops", async () => {
   let rows = [{ device_sn: "CAM1", record_id: 7, crop_hb3_path: "/mnt/a.jpg" }];
   const station = fakeStation({ direct: () => rows && { data: rows }, latest: latestFor("/mnt/b.jpg", 1) });
   const { warm } = setup(station);
@@ -147,6 +147,32 @@ test("a station that has answered the direct read is never asked latest-info", a
   rows = undefined; // the direct read drops once
   await run(() => warm.refreshLastEventImageFor("CAM1"));
   assert.ok(!station.asked.includes("10013@0"));
+});
+
+const emptyTable = () => ({ cmd: 10000, count: 0, data: "", mIntRet: 0, msg: "SUCCESSFUL" });
+
+test("a direct read answered with zero rows is followed by latest-info, whose crop fills an empty image", async () => {
+  const crop = "/zx/hdd_data0/Camera00/202610/20261016120000/snapshort.jpg";
+  const station = fakeStation({ direct: emptyTable, latest: latestFor(crop, 41) });
+  const { warm, log, file } = setup(station);
+
+  assert.equal(await run(() => warm.refreshLastEventImageFor("CAM1")), true);
+  assert.deepEqual(station.images, [crop]);
+  assert.ok(fs.existsSync(file));
+  assert.ok(!log.some((m) => m.startsWith("history query: no records parsed")));
+});
+
+test("a station that answered rows yesterday is still asked latest-info when today has none", async () => {
+  let direct = () => ({ data: [{ device_sn: "CAM1", record_id: 7, crop_hb3_path: "/zx/a.jpg" }] });
+  const station = fakeStation({ direct: () => direct(), latest: latestFor("/zx/b.jpg", 1) });
+  const { warm } = setup(station);
+
+  await run(() => warm.refreshLastEventImageFor("CAM1"));
+  assert.ok(!station.asked.includes("10013@0"));
+
+  direct = emptyTable;
+  await run(() => warm.refreshLastEventImageFor("CAM1"));
+  assert.ok(station.asked.includes("10013@0"));
 });
 
 test("a station silent on both forms is not asked latest-info again straight after three tries", async () => {

@@ -156,9 +156,9 @@ export function createWarmup(ctx) {
     return Number.isFinite(t) ? t : 0;
   }
 
-  // Stations that have answered the direct read at least once. Only a station that never has (a
-  // HomeBase 2 sends nothing back to 10000 on either channel) falls back to the latest-info query, so a
-  // station whose direct read merely dropped once never swaps to the older form.
+  // Stations that have answered the direct read at least once. A station that never has (a HomeBase 2
+  // sends nothing back to 10000 on either channel) falls back to the latest-info query, as does one that
+  // answers with zero rows, so a station whose direct read merely dropped once never swaps to the older form.
   const directReadAnswered = new Set();
   // Per device, the latest-info crop path last seen, and per station, how many latest-info queries in a
   // row went unanswered. One that has answered keeps being asked: a T8200 can miss three in a row and
@@ -294,7 +294,9 @@ export function createWarmup(ctx) {
     let answered = chunk.length > 0;
     const answeredBefore = directReadAnswered.has(stationSn);
     if (chunk.length) directReadAnswered.add(stationSn);
-    else if (!directReadAnswered.has(stationSn) && latestInfoDue(stationSn)) {
+    // A HomeBase 3 answers the direct read with today's rows only, so a day without events reads as zero rows.
+    const answeredEmpty = !records.length && firstJsonObject(chunk)?.mIntRet === 0;
+    if ((answeredEmpty || !directReadAnswered.has(stationSn)) && latestInfoDue(stationSn)) {
       const latest = await queryLatestInfoCovers(session, accountId, stationSn);
       if (latest) [records, received, answered] = [latest, undefined, true];
       else received += "; latest-info unanswered too";
