@@ -41,13 +41,14 @@ function within(promise, what) {
 }
 
 /** A bridge HTTP server over a fake camera whose live() hands out the handles the test drives. */
-async function setup({ live = true, views = [0], dir, env = {} } = {}) {
+async function setup({ live = true, views = [0], outputs = [], dir, env = {} } = {}) {
   const config = loadConfig({ EUFY_EMAIL: "x@y.z", EUFY_PASSWORD: "pw", ...env });
   const state = createState();
   state.flags.ready = true;
   const t = { state, broadcasts: [], handles: [], readableOpens: 0, dropped: [], failures: [] };
   const camera = {
     views: () => views,
+    ...(outputs.length ? { outputResolutions: () => outputs } : {}),
     openReadable: async () => void t.readableOpens++,
     ...(live && {
       live: async (opts) => {
@@ -312,3 +313,37 @@ for (const [name, opts, query] of [
     }
   });
 }
+test("Full HD audio forwards the selected output and optic and releases only its consumer", async () => {
+  const t = await setup({ views: [0, 1], outputs: ["1080p"] });
+  try {
+    const p = pull(t, "?view=1&outputResolution=1080p");
+    await until(() => t.handles.length === 1, "Full HD secondary audio attached");
+    assert.equal(t.lastLiveOptions.view, 1);
+    assert.equal(t.lastLiveOptions.outputResolution, "1080p");
+    t.handles[0].emit("audio", { codec: "aac-lc", data: Buffer.from("fff1aa", "hex") });
+    await until(() => p.chunks.length > 0, "Full HD secondary audio served");
+    assert.equal(p.status, 200);
+    p.req.destroy();
+    await until(() => t.handles[0].stops === 1, "Full HD audio released");
+    assert.deepEqual(t.failures, []);
+  } finally {
+    await t.close();
+  }
+});
+
+test("unsupported or malformed audio output selections fail before opening live media", async () => {
+  const t = await setup({ views: [0, 1] });
+  try {
+    for (const [query, expected] of [
+      ["?view=1&outputResolution=1080p", 404],
+      ["?view=1&outputResolution=4K", 400],
+      ["?outputResolution=1080p&outputResolution=1080p", 400],
+    ]) {
+      assert.equal((await pull(t, query).done).status, expected);
+    }
+    assert.equal(t.handles.length, 0);
+    assert.deepEqual(t.failures, []);
+  } finally {
+    await t.close();
+  }
+});

@@ -215,7 +215,18 @@ test("Full HD flows through advertised sources, HTTP and go2rtc without replacin
   h.ctx.cfg.go2rtcConfig = path.join(h.dir, "go2rtc.yaml");
   await writeGo2rtcConfig(h.ctx.cfg, reply.devices);
   const config = await fs.readFile(h.ctx.cfg.go2rtcConfig, "utf8");
-  assert.match(config, new RegExp(`${SN}_view_1_output_1080p:.*view=1&outputResolution=1080p`));
+  for (const source of views.flatMap((view) => [view, ...view.outputs])) {
+    const audioPath = source.stream.replace(/^\/stream\//, "/audio/");
+    assert.ok(
+      config.includes(
+        `  ${source.id}:\n` +
+          `    - ffmpeg:http://127.0.0.1:3000${source.stream}#video=copy#async\n` +
+          `    - http://127.0.0.1:3000${audioPath}\n` +
+          `    - ffmpeg:${source.id}#audio=opus#raw=-af asetpts=N/SR/TB`,
+      ),
+      `matching video, audio and Opus sources for ${source.id}`,
+    );
+  }
 });
 
 test("unsupported or malformed Full-HD selections do not open media or hide behind instant start", async (t) => {
