@@ -42,11 +42,13 @@ export async function writeGo2rtcConfig(cfg, devices) {
     for (const view of d.views ?? [{ id: d.sn, stream: d.stream }]) {
       const video = `ffmpeg:http://${cfg.selfHost}:${cfg.port}${view.stream}#video=copy#async${input}`;
       // Live audio (LIVE_AUDIO=1): a second source for the main view only, merged by go2rtc into the same
-      // stream. AAC is copied for MSE/RTSP/HLS and transcoded to Opus for WebRTC, which has no AAC.
+      // stream. ADTS carries no global header, which go2rtc's internal RTSP hop needs ("AAC with no global
+      // headers is currently not supported"), so the AAC is re-encoded (16 kHz mono: negligible CPU) for
+      // MSE/RTSP/HLS, plus Opus for WebRTC, which has no AAC.
       if (cfg.liveAudio && view.id === d.sn) {
         lines.push(`  ${view.id}:`);
         lines.push(`    - ${video}`);
-        lines.push(`    - ffmpeg:http://${cfg.selfHost}:${cfg.port}/audio/${d.sn}#audio=copy#audio=opus#async#input=eufy_aac`);
+        lines.push(`    - ffmpeg:http://${cfg.selfHost}:${cfg.port}/audio/${d.sn}#audio=aac#audio=opus#async#input=eufy_aac`);
       } else {
         lines.push(`  ${view.id}: ${video}`);
       }

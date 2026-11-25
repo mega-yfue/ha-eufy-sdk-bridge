@@ -98,7 +98,7 @@ test("with LIVE_AUDIO each main view gets an AAC/Opus audio source", async () =>
     yaml.includes(
       "  CAM1:\n" +
         "    - ffmpeg:http://127.0.0.1:3000/stream/CAM1#video=copy#async\n" +
-        "    - ffmpeg:http://127.0.0.1:3000/audio/CAM1#audio=copy#audio=opus#async#input=eufy_aac\n",
+        "    - ffmpeg:http://127.0.0.1:3000/audio/CAM1#audio=aac#audio=opus#async#input=eufy_aac\n",
     ),
   );
   assert.ok(yaml.includes('  eufy_aac: "-analyzeduration 0 -probesize 4096 -f aac -i {input}"'));
