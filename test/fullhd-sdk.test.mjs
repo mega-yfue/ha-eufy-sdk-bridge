@@ -13,6 +13,7 @@ for (const [model, name, views, outputs] of [
   test(`published SDK advertises and routes the supported output for ${model}`, async (t) => {
     const stationSn = "T8000P0000000000";
     const sn = "T8000P0000000001";
+    const probeSn = "T8000P0000000002";
     const client = new EufyMega({
       email: "synthetic@example.invalid",
       password: "synthetic",
@@ -46,25 +47,29 @@ for (const [model, name, views, outputs] of [
         raw: { parent_sn: stationSn, device_channel: 3, device_model: model, device_name: name },
       },
     ];
+    client.registry.devices.push({
+      ...client.registry.devices[1],
+      sn: probeSn,
+      model: "T8E00",
+      name: "Synthetic PoE Bullet PTZ Cam S4 contract probe",
+      channel: 4,
+      raw: {
+        parent_sn: stationSn,
+        device_channel: 4,
+        device_model: "T8E00",
+        device_name: "Synthetic PoE Bullet PTZ Cam S4 contract probe",
+      },
+    });
     t.mock.method(client.mega, "getDeviceParamList", async () => ({ params: [] }));
     t.after(() => client.rtc.close());
-    const camera = (await client.getDevice(sn)).camera();
-    if (typeof camera?.outputResolutions !== "function") {
-      assert.deepEqual(cameraViewOutputs(sn, 0, camera), {
-        view: 0,
-        id: sn,
-        stream: `/stream/${sn}`,
-        snapshot: `/snapshot/${sn}`,
-      });
-      t.skip("the pinned SDK has no Full-HD media contract; native source fallback verified");
-      return;
+    if (typeof client.mega.rtcIdentity === "function") {
+      t.mock.method(client.mega, "rtcIdentity", () => ({
+        authToken: "synthetic",
+        userId: "synthetic",
+        gtoken: "synthetic",
+      }));
     }
-    t.mock.method(client.mega, "rtcIdentity", () => ({
-      authToken: "synthetic",
-      userId: "synthetic",
-      gtoken: "synthetic",
-    }));
-    t.mock.method(client.mega, "portalShard", async () => "eu-pr");
+    if (typeof client.mega.portalShard === "function") t.mock.method(client.mega, "portalShard", async () => "eu-pr");
     const packets = [];
     client.rtc.deps.createSession = () => {
       const session = new EventEmitter();
@@ -77,6 +82,18 @@ for (const [model, name, views, outputs] of [
       session.close = () => {};
       return session;
     };
+    const camera = (await client.getDevice(sn)).camera();
+    const supportedCamera = (await client.getDevice(probeSn)).camera();
+    if (typeof supportedCamera?.outputResolutions !== "function") {
+      assert.deepEqual(cameraViewOutputs(sn, 0, camera), {
+        view: 0,
+        id: sn,
+        stream: `/stream/${sn}`,
+        snapshot: `/snapshot/${sn}`,
+      });
+      t.skip("the pinned SDK has no Full-HD media contract; native source fallback verified");
+      return;
+    }
     assert.deepEqual(camera.views(), views);
     assert.deepEqual(camera.outputResolutions?.() ?? [], outputs);
     for (const view of views) {
