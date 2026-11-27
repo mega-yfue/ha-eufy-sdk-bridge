@@ -11,12 +11,14 @@ bundled, so live camera video (with the camera's sound, where it sends AAC-LC) i
 RTSP / WebRTC / MSE / HLS with nothing else to install.
 
 ```
-WS    :3000/ws             control, state, events     ← the frontend talks to this
-HTTP  :3000/stream/<sn>    live video (Annex-B)       ← go2rtc pulls this
-HTTP  :3000/audio/<sn>     live audio (ADTS AAC)      ← and this, next to the video
-HTTP  :3000/snapshot/<sn>  a JPEG still
-HTTP  :3000/clip/<sn>      the latest detection's recording, as an mp4 (HomeBase 2)
-HTTP  :3000/healthz        which cameras are streaming
+WS    :3000/ws                     control, state, events     ← the frontend talks to this
+HTTP  :3000/stream/<sn>            live video (Annex-B)       ← go2rtc pulls this
+HTTP  :3000/audio/<sn>             live audio (ADTS AAC)      ← and this, next to the video
+HTTP  :3000/snapshot/<sn>          a JPEG still
+HTTP  :3000/clip/<sn>              the latest detection's recording, as an mp4 (HomeBase 2)
+HTTP  :3000/recordings/<sn>        a camera's recordings today (HomeBase 3)
+HTTP  :3000/recording/<sn>/<name>  one stored recording, as an mp4
+HTTP  :3000/healthz                which cameras are streaming
 ```
 
 Video is deliberately **not** on the WebSocket: the WS hands back a URL, and _connecting to that URL

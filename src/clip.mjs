@@ -8,17 +8,34 @@ import { execFile } from "node:child_process";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** Mux Annex-B H.264 (+ ADTS AAC when present) into `out` with ffmpeg, stream copy only. */
-export async function muxMp4({ video, audio, fps }, out) {
-  const inputs = [`${out}.h264`, `${out}.aac`];
-  await fs.promises.writeFile(inputs[0], video);
-  if (audio?.length) await fs.promises.writeFile(inputs[1], audio);
+/** The ffmpeg arguments that mux `video` (read from `videoIn`) and `audio` (from `audioIn`) into `out`. */
+export function muxArgs({ codec, audio, fps, frames, missingFrames, durationMs }, videoIn, audioIn, out) {
+  const hevc = codec === "h265";
   const args = ["-hide_banner", "-loglevel", "error", "-y", "-fflags", "+genpts"];
-  if (fps > 0) args.push("-framerate", String(fps));
-  args.push("-f", "h264", "-i", inputs[0]);
-  if (audio?.length) args.push("-f", "aac", "-i", inputs[1], "-map", "0:v", "-map", "1:a");
-  args.push("-c", "copy", "-movflags", "+faststart", "-f", "mp4", out);
+  // A raw stream carries no timestamps, so ffmpeg spaces the pictures evenly. With pictures missing,
+  // spacing them at the camera's rate would end the video early and pull it ahead of the audio, so they
+  // are spread over the recording's own span instead.
+  const rate = missingFrames > 0 && frames > 1 && durationMs > 0 ? ((frames - 1) * 1000) / durationMs : fps;
+  // `-r` sets the input rate. `-framerate` does not: the raw demuxer keeps the rate the stream's own
+  // timing info declares, which can differ from the rate the camera recorded at.
+  if (rate > 0) args.push("-r", String(Math.round(rate * 1000) / 1000));
+  args.push("-f", hevc ? "hevc" : "h264", "-i", videoIn);
+  if (audio?.length) args.push("-f", "aac", "-i", audioIn, "-map", "0:v", "-map", "1:a");
+  args.push("-c", "copy");
+  // The parameter sets travel in-band with every keyframe, which is what an `hev1` sample entry declares.
+  if (hevc) args.push("-tag:v", "hev1");
+  args.push("-movflags", "+faststart", "-f", "mp4", out);
+  return args;
+}
+
+/** Mux Annex-B H.264 or H.265 (+ ADTS AAC when present) into `out` with ffmpeg, stream copy only. */
+export async function muxMp4(clip, out) {
+  const { video, audio } = clip;
+  const inputs = [`${out}.${clip.codec === "h265" ? "h265" : "h264"}`, `${out}.aac`];
   try {
+    await fs.promises.writeFile(inputs[0], video);
+    if (audio?.length) await fs.promises.writeFile(inputs[1], audio);
+    const args = muxArgs(clip, inputs[0], inputs[1], out);
     await new Promise((resolve, reject) =>
       execFile("ffmpeg", args, { timeout: 60_000 }, (e, _out, err) => {
         if (!e) return resolve();
