@@ -5,6 +5,8 @@
 //   HTTP  :PORT/audio/<sn>     live audio (ADTS AAC)          (go2rtc pulls this too)
 //   HTTP  :PORT/snapshot/<sn>  a JPEG still
 //   HTTP  :PORT/clip/<sn>      the latest detection's recording, as an mp4 (HomeBase 2)
+//   HTTP  :PORT/recordings/<sn>          a camera's recordings today (HomeBase 3)
+//   HTTP  :PORT/recording/<sn>/<name>    one stored recording, as an mp4
 //   HTTP  :PORT/healthz        liveness + auth state + which cameras are streaming
 //
 // This file is just the WIRING. Each concern lives in src/: config, the SDK client, the shared runtime
@@ -31,6 +33,8 @@ import { createAuth } from "./src/auth.mjs";
 import { createBoot } from "./src/boot.mjs";
 import { createSolix } from "./src/solix.mjs";
 import { createClips } from "./src/clip.mjs";
+import { createRecordings } from "./src/recordings.mjs";
+import { createRecordingArchive } from "./src/recording-archive.mjs";
 import { createHttpHandler } from "./src/http-routes.mjs";
 import { createWsServer } from "./src/ws-server.mjs";
 import { closeStreamClients } from "./streams.mjs";
@@ -79,6 +83,8 @@ Object.assign(
   createBoot(ctx),
   createSolix(ctx),
   createClips(ctx),
+  createRecordings(ctx),
+  createRecordingArchive(ctx),
 );
 
 const httpServer = http.createServer(createHttpHandler(ctx));
@@ -138,6 +144,9 @@ async function shutdown() {
   if (timers.watchdog) clearInterval(timers.watchdog);
   if (timers.streamIdle) clearInterval(timers.streamIdle);
   if (timers.rtspIdle) clearInterval(timers.rtspIdle);
+  clearInterval(timers.recordings);
+  clearTimeout(timers.recordingsMidnight);
+  timers.recordings = timers.recordingsMidnight = null; // a sweep still finishing plans no further read
   flags.go2rtcProc?.kill();
   await closeStreamClients();
   await ctx.stopSolix?.();

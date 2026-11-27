@@ -578,8 +578,33 @@ whichever of the two is newer.
 `GET /clip/<sn>` downloads the recording the camera's latest push named, over the station's P2P session
 (the camera is not woken), and muxes it with ffmpeg. It waits until `CLIP_SETTLE_MS` has passed since
 that push, then keeps the clip until the next one. It answers 404 on a camera without stored recordings
-(anything but a HomeBase 2 camera), 409 when no push has named a recording since the bridge started, and
-502 with the SDK's `reason` when the download fails.
+(one attached to a station other than a HomeBase 2 or HomeBase 3), 409 when no push has named a recording
+since the bridge started, and 502 with the SDK's `reason` when the download fails. An H.265 recording is
+muxed with the `hev1` tag.
+
+`GET /recordings/<sn>` lists a HomeBase 3 camera's recordings from the station's own
+`history_record_info` table, newest first:
+`{ "recordings": [{ "name": "20260101120041", "cipherId": 0, "start": "2026-01-01T18:00:41.000Z", "end": "…", "frames": 652, "trigger": 4 }] }`.
+The station answers that table read with the current day's rows only. `name` is the station-local
+`yyyyMMddHHmmss` stamp the recording is stored under; `start` and `end` are UTC; `trigger` is the row's
+`trigger_type` (2 motion, 4 person). `GET /recording/<sn>/<name>.mp4` downloads one recording by name and
+answers it as an mp4. Any recording still on the station can be fetched, not only today's. It answers 400
+for a name that is not a stamp, 404 for one the station no longer holds (`reason: "no-data"`), and 502 with
+the SDK's `reason` when the download fails. `?cipher=<id>` passes the `cipherId` the list gives, which a
+HomeBase 2 needs and a HomeBase 3 ignores.
+
+With `RECORDINGS_DIR` set, the bridge saves every recording a HomeBase 3 lists to that folder as
+`<camera serial>/<YYYYMMDDTHHMMSSZ>.mp4`, named for its UTC start. It reads each station's list every
+`RECORDINGS_POLL_MS` and once more just before the station's midnight, downloads each recording
+`RECORDINGS_SETTLE_MS` after it ends, and skips one already saved. Recordings still to save are kept in
+`.queue.json` in that folder, so a restart or a day change does not drop them. A recording whose download
+fails three times (the station no longer holding it included) is given up on; a failure to write it (a full
+disk, a missing mount) is retried. A recording still unsaved two weeks after it started, past the station's
+retention, leaves the queue. A camera's
+recordings wait while its live view is open. Each file is written under a hidden `.<name>.part` name and
+renamed when complete. With `RECORDINGS_OLD_DIR` set, a saved recording older than `RECORDINGS_OLD_DAYS` is
+copied to that folder at the same path, then removed from `RECORDINGS_DIR`. Nothing moves when one folder is
+inside the other.
 
 go2rtc (bundled) turns `/stream/<sn>` into RTSP / WebRTC / MSE / HLS, so the frontend never speaks the
 raw video protocol.
@@ -596,7 +621,7 @@ raw video protocol.
   (`CMD_INDOOR_PAN_CALIBRATION` 6017 / `CMD_OUTDOOR_PAN_CALIBRATION` 6251) is the notable one.
 - Guard / station security mode (arm home/away/disarm).
 - Per-device event subscription/filtering (events broadcast to all clients).
-- Audio / recording / timelapse.
+- Audio / timelapse.
 
 ### Live audio
 

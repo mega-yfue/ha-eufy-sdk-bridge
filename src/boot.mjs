@@ -167,6 +167,7 @@ export function createBoot(ctx) {
       void (async () => {
         await ctx.warmFaceRoster(); // resolve person_id -> name for face-recognition events
         await ctx.warmLastEventImages(); // populate "Last event" from local HomeBase storage on first load
+        ctx.startRecordingArchive?.(); // after the warm-ups, which read the same table
       })();
     } finally {
       flags.booting = false;

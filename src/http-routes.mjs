@@ -439,6 +439,27 @@ export function createHttpHandler(ctx) {
       return res.end(clip.mp4);
     }
 
+    // A HomeBase 3 camera's stored recordings: today's list, and any one by name as an mp4 (recordings.mjs).
+    if (kind === "recordings" && sn) {
+      const out = (await ctx.listRecordings?.(sn)) ?? { status: 404, error: "recordings unavailable" };
+      return json(
+        res,
+        out.recordings ? 200 : out.status,
+        out.recordings ? { recordings: out.recordings } : { error: out.error },
+      );
+    }
+    if (kind === "recording" && sn) {
+      const name = url.pathname.split("/")[3]?.replace(/\.mp4$/, "") ?? "";
+      const cipherId = Number(url.searchParams.get("cipher")) || 0;
+      const out = (await ctx.recordingMp4?.(sn, name, { cipherId })) ?? {
+        status: 404,
+        error: "recordings unavailable",
+      };
+      if (!out.mp4) return json(res, out.status, { error: out.error, reason: out.reason });
+      res.writeHead(200, { "content-type": "video/mp4", "content-length": out.mp4.length });
+      return res.end(out.mp4);
+    }
+
     if ((kind === "stream" || kind === "audio") && sn) {
       noteStreamRequest(sn, req); // trace who is pulling this stream (incl. go2rtc's real consumers)
       if (cfg.streamIdleMs) lastPullAttempt.set(sn, Date.now()); // consumer is asking (watched vs. gone)
