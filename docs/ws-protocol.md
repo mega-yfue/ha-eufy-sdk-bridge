@@ -578,8 +578,9 @@ whichever of the two is newer.
 `GET /clip/<sn>` downloads the recording the camera's latest push named, over the station's P2P session
 (the camera is not woken), and muxes it with ffmpeg. It waits until `CLIP_SETTLE_MS` has passed since
 that push, then keeps the clip until the next one. It answers 404 on a camera without stored recordings
-(anything but a HomeBase 2 camera), 409 when no push has named a recording since the bridge started, and
-502 with the SDK's `reason` when the download fails.
+(one attached to a station other than a HomeBase 2 or HomeBase 3), 409 when no push has named a recording
+since the bridge started, and 502 with the SDK's `reason` when the download fails. An H.265 recording is
+muxed with the `hev1` tag.
 
 go2rtc (bundled) turns `/stream/<sn>` into RTSP / WebRTC / MSE / HLS, so the frontend never speaks the
 raw video protocol.

@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { loadConfig } from "../src/config.mjs";
 import { createState } from "../src/state.mjs";
 import { createHttpHandler } from "../src/http-routes.mjs";
-import { createClips } from "../src/clip.mjs";
+import { createClips, muxArgs, muxMp4 } from "../src/clip.mjs";
 
 const PUSH = { deviceSn: "CAM1", cipher: 241, payload: { p: "20260101120000" } };
 
@@ -126,4 +126,28 @@ test("clip: a failed download answers 502 with the SDK's reason, and the next re
   fail = false;
   assert.equal((await get(handler)).code, 200);
   assert.equal(calls.download.length, 2);
+});
+
+test("muxArgs: H.265 is read as hevc and tagged hev1, and the camera's rate is set with -r", () => {
+  const h265 = muxArgs({ codec: "h265", fps: 15, audio: Buffer.from("A") }, "v", "a", "out");
+  assert.deepEqual(h265.slice(h265.indexOf("-r"), h265.indexOf("-r") + 6), ["-r", "15", "-f", "hevc", "-i", "v"]);
+  assert.deepEqual(h265.slice(h265.indexOf("-tag:v"), h265.indexOf("-tag:v") + 2), ["-tag:v", "hev1"]);
+  const h264 = muxArgs({ codec: "h264", fps: 0 }, "v", "a", "out");
+  assert.ok(h264.includes("h264") && !h264.includes("-tag:v") && !h264.includes("-r") && !h264.includes("aac"));
+  assert.ok(!muxArgs({ fps: 15 }, "v", "a", "out").includes("hevc")); // a HomeBase 2 clip names no codec
+});
+
+test("muxArgs: with pictures missing, the rest are spread over the recording's span", () => {
+  const args = muxArgs({ fps: 15, frames: 445, missingFrames: 13, durationMs: 30_700 }, "v", "a", "out");
+  assert.equal(args[args.indexOf("-r") + 1], "14.463"); // 444 intervals over 30.7 s, not 15
+  const whole = muxArgs({ fps: 15, frames: 445, missingFrames: 0, durationMs: 29_600 }, "v", "a", "out");
+  assert.equal(whole[whole.indexOf("-r") + 1], "15");
+});
+
+test("muxMp4: a failed write leaves no stream file behind", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mux-"));
+  const out = path.join(dir, "clip.mp4");
+  fs.mkdirSync(`${out}.aac`); // the audio cannot be written
+  await assert.rejects(muxMp4({ video: Buffer.from("V"), audio: Buffer.from("A") }, out));
+  assert.deepEqual(fs.readdirSync(dir), ["clip.mp4.aac"]); // the video's temp file is gone
 });
