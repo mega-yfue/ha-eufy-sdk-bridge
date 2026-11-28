@@ -46,7 +46,38 @@ function fakeEufy() {
   const smartDropSurface = {
     openLid: async () => void smartDropCalls.push(["openLid"]),
   };
+  // Mirrors the SDK's `treat` surface on a dog camera: `toss(distance)`, sent once and never retried,
+  // recorded so the routing test can assert the bridge called it exactly once.
+  const treatCalls = [];
+  const treatSurface = {
+    toss: async (distance) => void treatCalls.push(["toss", distance]),
+  };
   const devices = {
+    DOGCAM1: {
+      describe: () => ({
+        sn: "DOGCAM1",
+        name: "Dog cam",
+        model: "T7200",
+        modelName: "Pet Camera",
+        codec: "camera",
+        capabilities: ["camera", "video", "treat"],
+      }),
+      getProperties: () => ({ lastTossAt: { value: 1700000000 } }),
+      treat: () => treatSurface,
+    },
+    // A sibling dog camera the SDK has not verified the toss on: `treat` reports the last toss, but has no `toss`.
+    DOGCAM2: {
+      describe: () => ({
+        sn: "DOGCAM2",
+        name: "Other dog cam",
+        model: "T7203",
+        modelName: "Pet Camera",
+        codec: "camera",
+        capabilities: ["camera", "video", "treat"],
+      }),
+      getProperties: () => ({ lastTossAt: { value: 1700000000 } }),
+      treat: () => ({}),
+    },
     DROP1: {
       describe: () => ({
         sn: "DROP1",
@@ -110,6 +141,7 @@ function fakeEufy() {
     ptzCalls, // what the fake ptz surface was asked to do, for the device.action test
     sirenCalls, // what the fake siren surface was asked to do, for the device.action test
     smartDropCalls, // what the fake smartDrop surface was asked to do, for the device.action test
+    treatCalls, // what the fake treat surface was asked to do, for the device.action test
     pollIntervalMs: 600000,
     async getDevices() {
       return [{ sn: "CAM1" }, { sn: "PTCAM1" }, { sn: "SIRENCAM1" }, { sn: "SENSOR1" }];
@@ -166,6 +198,14 @@ test("device view: describe shape + camera vs sensor", async () => {
   assert.equal(cam.canReboot, false);
   assert.deepEqual(cam.state, { battery: 74, motion: false });
   assert.equal(sensor.stream, undefined); // not a camera
+  httpServer.close();
+});
+
+test("device view: canToss only where the SDK's treat surface offers toss", async () => {
+  const { ctx, httpServer } = buildCtx();
+  assert.equal((await ctx.describeDevice("DOGCAM1")).canToss, true);
+  assert.equal((await ctx.describeDevice("DOGCAM2")).canToss, false); // `treat` without `toss`
+  assert.equal((await ctx.describeDevice("CAM1")).canToss, false); // no `treat` at all
   httpServer.close();
 });
 
@@ -249,6 +289,42 @@ test("device.action: routes openLid to a SmartDrop's smartDrop surface, and only
   assert.equal(absent[0].ok, false);
   assert.match(absent[0].error, /no action 'openLid'/);
   assert.deepEqual(ctx.eufy.smartDropCalls, [["openLid"]]); // unchanged
+
+  httpServer.close();
+});
+
+test("device.action: routes toss to a dog camera's treat surface once, and only there", async () => {
+  const { ctx, state, httpServer } = buildCtx();
+  state.flags.ready = true;
+
+  const tossed = await wsCall(ctx, { id: 1, cmd: "device.action", sn: "DOGCAM1", action: "toss", args: ["far"] });
+  assert.equal(tossed[0].ok, true);
+  // One request is one call, with the distance passed through unchanged — the SDK validates it.
+  assert.deepEqual(ctx.eufy.treatCalls, [["toss", "far"]]);
+
+  // A camera without the treat capability has no surface carrying the verb, so it fails loudly.
+  const absent = await wsCall(ctx, { id: 2, cmd: "device.action", sn: "CAM1", action: "toss", args: ["far"] });
+  assert.equal(absent[0].ok, false);
+  assert.match(absent[0].error, /no action 'toss'/);
+  assert.deepEqual(ctx.eufy.treatCalls, [["toss", "far"]]); // unchanged
+
+  httpServer.close();
+});
+
+test("device.action: a toss whose device lookup ran past the budget is refused, and nothing is sent", async () => {
+  const { ctx, state, httpServer } = buildCtx();
+  state.flags.ready = true;
+  ctx.tossLookupBudgetMs = 5;
+  const lookUp = ctx.eufy.getDevice.bind(ctx.eufy);
+  ctx.eufy.getDevice = async (sn) => {
+    await new Promise((resolve) => setTimeout(resolve, 40)); // a slow lookup, past the budget
+    return lookUp(sn);
+  };
+
+  const late = await wsCall(ctx, { id: 1, cmd: "device.action", sn: "DOGCAM1", action: "toss", args: ["far"] });
+  assert.equal(late[0].ok, false);
+  assert.match(late[0].error, /toss not sent/);
+  assert.deepEqual(ctx.eufy.treatCalls, []);
 
   httpServer.close();
 });

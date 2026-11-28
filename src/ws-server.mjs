@@ -9,6 +9,13 @@ import { redactSecrets } from "./redact.mjs";
 import { cameraViews, cameraView, validView } from "./camera-views.mjs";
 import { takeScreenshot } from "./screenshot.mjs";
 
+// How long the device lookup before a treat toss may take. The SDK sends a toss within 10 s of being asked or
+// not at all, and a host gives up on a `device.action` after its own wait (15 s in the Home Assistant
+// integration): a toss that reached the SDK after a slow lookup could otherwise land after the host reported
+// failure, and a press made again on that report would be a second treat. Overridable as
+// `ctx.tossLookupBudgetMs` (tests).
+const TOSS_LOOKUP_BUDGET_MS = 3_000;
+
 // Commands that require an authenticated eufy session — gated in one place before dispatch. (auth.* and
 // solix.* run before this gate, so a client can drive 2FA/captcha and Solix while eufy is still pending.)
 const AUTHED_COMMANDS = new Set([
@@ -184,9 +191,11 @@ export function createWsServer(ctx, httpServer) {
           // methods are reachable — the same controls the SDK intends a caller to invoke.
           const action = String(msg.action ?? "");
           const args = Array.isArray(msg.args) ? msg.args : [];
+          const received = Date.now();
           const dev = await eufy.getDevice(msg.sn);
           // Capability surfaces that expose actions. Add more accessors here as needed.
           const ptz = dev.ptz?.();
+          const treat = dev.treat?.();
           const surfaces = [
             dev.smartLight?.(),
             dev.camera?.(),
@@ -194,6 +203,7 @@ export function createWsServer(ctx, httpServer) {
             dev.siren?.(),
             ptz,
             dev.smartDrop?.(),
+            treat,
           ].filter(Boolean);
           // A dotted action walks a sub-API namespace: `preset.goto` is `ptz().preset().goto(id)`.
           // Every segment before the leaf ANSWERS — it hands back the namespace without acting — so it
@@ -215,6 +225,11 @@ export function createWsServer(ctx, httpServer) {
           }
           for (const seg of path) target = typeof target?.[seg] === "function" ? target[seg]() : undefined;
           if (typeof target?.[leaf] !== "function") return fail(`no action '${action}' on ${msg.sn}`);
+          const lookupMs = Date.now() - received;
+          if (target === treat && leaf === "toss" && lookupMs > (ctx.tossLookupBudgetMs ?? TOSS_LOOKUP_BUDGET_MS)) {
+            console.error(`[bridge] device.action toss NOT SENT sn=${msg.sn}: the device lookup took ${lookupMs}ms`);
+            return fail(`toss not sent: looking up ${msg.sn} took ${lookupMs} ms`);
+          }
           const t0 = Date.now();
           dbg(`device.action → ${action} sn=${msg.sn} args=${JSON.stringify(args)}${via}`);
           try {

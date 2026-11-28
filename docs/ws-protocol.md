@@ -131,6 +131,9 @@ Every device the account exposes. _(Requires `auth.state == "ok"`.)_
   live-media budget. The `battery` capability alone is not the answer: mains-only models (the T8410 above) still
   carry it.
 - `canReboot` is `true` on HomeBase/station devices, which accept `device.reboot`.
+- `canToss` is `true` on a dog camera that accepts the `toss` action (see `device.action`). The `treat` capability
+  alone is not the answer: a model the SDK has not verified the toss on carries it too, with only its last-toss
+  reading. A host gates its toss controls on `canToss`.
 - A device that failed to resolve appears as `{ "sn": "…", "error": "…" }`.
 
 #### Decoded readings (additive, schema 1)
@@ -240,7 +243,7 @@ device's capabilities expose (e.g. `statusLed`, `nightVision`, guard-mode `mode`
 Invoke a capability **action** — a typed method that is not a scalar property, so `device.set` cannot
 reach it. `{ sn, action, args? }`, where `args` is the positional argument list. Only methods a
 capability surface exposes are reachable; today those surfaces are `smart_light`, `camera`, `lock`,
-`siren` and `ptz`. _(Requires auth.)_
+`siren`, `ptz`, `smart_drop` and `treat`. _(Requires auth.)_
 
 A **dotted** `action` walks a sub-API namespace: every segment before the last one hands back a
 namespace without acting (so it takes no arguments), and only the final segment receives `args`.
@@ -257,8 +260,10 @@ namespace without acting (so it takes no arguments), and only the final segment 
 { "id": 9, "cmd": "device.action", "sn": "EXAMPLE-CAM-0001", "action": "trigger", "args": [10] }
 // stop it before the duration runs out →
 { "id": 10, "cmd": "device.action", "sn": "EXAMPLE-CAM-0001", "action": "stop" }
+// toss one treat from a dog camera — the distance is `near`, `middle` or `far` →
+{ "id": 11, "cmd": "device.action", "sn": "EXAMPLE-CAM-0003", "action": "toss", "args": ["middle"] }
 // no surface on this device carries the verb →
-{ "id": 11, "ok": false, "error": "no action 'calibrate' on EXAMPLE-CAM-0002" }
+{ "id": 12, "ok": false, "error": "no action 'calibrate' on EXAMPLE-CAM-0002" }
 ```
 
 PTZ movement is **fire-and-forget**: P2P sends no acknowledgement, so `ok: true` means the frame left
@@ -272,6 +277,13 @@ params, a camera attached to one that reports the EAS slot, or a standalone sire
 its own `test`). A device that has them lists `"siren"` among its `devices.list` capabilities — the
 duration is validated by the SDK, which rejects anything that is not a positive whole number of
 seconds.
+
+`toss` is carried by a dog camera whose summary has `canToss: true`. The SDK submits it **once**: one
+sequence, repeated only until the camera acknowledges it, and not sent at all if it cannot go out soon after
+it is requested. `ok: true` means the command was handed to the bridge's local transport, not that a treat
+landed, and a failed call is never retried — neither here nor in the SDK — because a repeat is a second
+treat. A host must not resend it on a timeout either. The camera's `lastTossAt` property moves to the time
+of the toss a few seconds later.
 
 ### `device.reboot`
 
