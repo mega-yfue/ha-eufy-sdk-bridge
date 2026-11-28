@@ -72,6 +72,9 @@ export function createDeviceView(ctx) {
       // also marks mains-only models.
       power: isCamera ? (onBatteryPower(m.model, m.capabilities) ? "battery" : "wired") : undefined,
       canReboot: m.codec === "station", // HomeBase-only; drives a Reboot button in HA
+      // A dog camera's treat launcher offers `toss` only where the SDK confirmed it (a verified model on its own
+      // station); `treat` alone also marks a sibling model that can only report its last toss.
+      canToss: typeof dev.treat?.()?.toss === "function",
     };
   }
 
